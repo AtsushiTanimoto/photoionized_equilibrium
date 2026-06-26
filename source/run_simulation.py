@@ -23,6 +23,6 @@ if __name__ == "__main__":
     
     # 計算の実行
     model.setup_grids()
-    model.calculate_equilibrium(N_packets=1000000, max_global_iterations=100)
+    model.calculate_equilibrium(N_packets=2000000, max_global_iterations=1)
     plot_results(model)
     model.save_tsv()
