@@ -80,15 +80,7 @@ class PhotoionizationModel:
         self.nu_grid = numpy.linspace(HI_nu0, 1.000e+03*HI_nu0, self.N_nu)
         self.a_nu_grid = HI_anu(self.nu_grid)
         self.B_nu_grid = B_nu(self.nu_grid, self.T_BB)
-        
-        # 理論的なストロームグレン半径 R_s を事前計算 (比較用)
-        # ヘリウムによる電子密度の増加を考慮: n_e ≈ n_H(1 + Y_He) (完全電離時)
-        integrand_Q         = numpy.pi * self.B_nu_grid / (h * self.nu_grid)
-        Q_H0                = 4 * numpy.pi * self.R_star_cm**2 * numpy.trapezoid(integrand_Q, self.nu_grid)
-        n_e_fully_ionized   = self.hydrogen_number_density * (1.0 + Y_He)
-        self.R_s_cm         = (3 * Q_H0 / (4 * numpy.pi * self.hydrogen_number_density * n_e_fully_ionized * HI_alphaB(self.T_gas_init)))**(1/3)
-        self.R_s_pc         = self.R_s_cm / 3.086e18
-        print(f"理論的なストロームグレン半径 R_s = {self.R_s_pc:.2f} pc")
+
 
     def calculate_equilibrium(self, max_global_iterations=30, tolerance=1e-3, N_packets=200000):
         """
