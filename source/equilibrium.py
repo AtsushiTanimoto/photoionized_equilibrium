@@ -62,7 +62,7 @@ class PhotoionizationModel:
         self.N_r = len(self.radius_edges) - 1
         self.r_cm = 0.5 * (self.radius_edges[1:] + self.radius_edges[:-1])
         self.dr_cm = numpy.diff(self.radius_edges)
-        self.r_pc = self.r_cm / 3.0856775814913673e18
+        self.r_pc = self.r_cm / constants.pc
         self.hydrogen_number_density = hydrogen_number_density
         self.source = source
         self.element_symbols = list(elements)

@@ -19,8 +19,6 @@ import scipy.interpolate
 import constants
 
 
-CM_INVERSE_TO_EV = 1.239841984e-4  # 1 cm^-1 = 1.2398e-4 eV
-Ry = 2.1798723611e-11               # リュードベリ [erg]
 
 
 # ---------------------------------------------------------------------------
@@ -62,7 +60,7 @@ def ionization_potential(Z, charge):
                 columns = line.split()
                 if len(columns) < 3 or line.strip() == "-1":
                     break
-                _ionization_potentials[(int(columns[0]), int(columns[1]))] = float(columns[2]) * CM_INVERSE_TO_EV
+                _ionization_potentials[(int(columns[0]), int(columns[1]))] = float(columns[2]) * constants.CM_INVERSE_TO_EV
     return _ionization_potentials[(Z, charge + 1)]
 
 
@@ -125,19 +123,16 @@ def radiative_recombination_rate(T_gas, rr_type, rr_parameters):
     return A / (x0 * (1.0 + x0)**(1.0 - B) * (1.0 + x1)**(1.0 + B))
 
 
-T_HI = 157807.0  # 水素の電離ポテンシャル / k_B [K]
-
-
 def radiative_recombination_energy_factor(T_gas, charge):
     """
     放射再結合で持ち去られる電子の平均運動エネルギー ⟨E⟩ を kT で割った値。
     水素様イオン (電荷 charge のイオンへの再結合) の Case A の値 (Hui & Gnedin 1997 のフィット β_A/(α_A kT)) を
-    温度を T/charge^2 にスケールして使う（低温で ≈ 0.7、高温 T ≫ charge^2 T_HI で ≈ 0.3）。
+    温度を T/charge^2 にスケールして使う（低温で ≈ 0.7、高温 T ≫ charge^2 constants.T_HI で ≈ 0.3）。
     非水素様イオンにもこの近似を用いる。
     """
     T_gas = numpy.asarray(T_gas, dtype=float)
     z = max(charge, 1)
-    lam = 2.0 * z**2 * T_HI / T_gas
+    lam = 2.0 * z**2 * constants.T_HI / T_gas
     alpha = 1.269e-13 * lam**1.503 / (1.0 + (lam / 0.522)**0.47)**1.923
     beta = 1.778e-29 * (T_gas / z**2) * lam**1.965 / (1.0 + (lam / 0.541)**0.502)**2.697
     return beta / (alpha * constants.k_B * T_gas / z**2)

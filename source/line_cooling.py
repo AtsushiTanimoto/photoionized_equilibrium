@@ -16,7 +16,6 @@ import constants
 
 
 N_LEVELS_MAX = 20       # 各イオンで考慮する準位数の上限（低い方から）。60 準位との差は T ≤ 2×10⁴ K の C II-C IV で 0.1% 以下
-Ry = 2.1798723611e-11   # リュードベリ [erg]
 
 # 冷却率の表の温度グリッド [K] (log10 T = 0, ..., 8)
 LOG_T_GRID = numpy.linspace(0.0, 8.0, 321)
@@ -82,7 +81,7 @@ def effective_collision_strength(T_gas, delta_E_Ry, transition_type, C, x_knots,
     Burgess & Tully (1992) のスケーリングを戻して有効衝突強度 Υ(T) を求める（CHIANTI の規約）
     スケールした衝突強度は 3 次スプラインで内挿する。
     """
-    kT_over_dE = constants.k_B * T_gas / (delta_E_Ry * Ry)
+    kT_over_dE = constants.k_B * T_gas / (delta_E_Ry * constants.Ry)
     if transition_type in (1, 4):
         x = 1.0 - numpy.log(C) / numpy.log(kT_over_dE + C)
     else:
