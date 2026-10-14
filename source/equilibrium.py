@@ -7,6 +7,8 @@
   熱平衡:   光電離加熱 + Compton 加熱 vs 輝線冷却 + 再結合冷却 (RR, DR) + 衝突電離冷却 + 制動放射 + Compton 冷却
 を局所反復で解く。
 """
+import astropy.constants
+import astropy.units
 import numpy
 import os
 import scipy.optimize
@@ -17,6 +19,13 @@ import atomic_data
 import bremsstrahlung
 import line_cooling
 import recombination
+
+# 物理定数 (cgs、astropy.constants の CODATA 値)
+k_B = astropy.constants.k_B.cgs.value  # ボルツマン定数 [erg K^-1]
+eV = astropy.units.eV.to(astropy.units.erg)  # 電子ボルト [erg]
+sigma_T = astropy.constants.sigma_T.cgs.value  # トムソン断面積 [cm^2]
+m_e_c2_eV = (astropy.constants.m_e * astropy.constants.c**2).to(astropy.units.eV).value  # 電子の静止エネルギー [eV]
+pc = astropy.constants.pc.cgs.value  # パーセク [cm]
 
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
@@ -62,7 +71,7 @@ class PhotoionizationModel:
         self.N_r = len(self.radius_edges) - 1
         self.r_cm = 0.5 * (self.radius_edges[1:] + self.radius_edges[:-1])
         self.dr_cm = numpy.diff(self.radius_edges)
-        self.r_pc = self.r_cm / constants.pc
+        self.r_pc = self.r_cm / pc
         self.hydrogen_number_density = hydrogen_number_density
         self.source = source
         self.element_symbols = list(elements)
@@ -90,7 +99,7 @@ class PhotoionizationModel:
         self.N_ions = len(self.ion_charge)
         self.ions = [self.elements[e].ions[int(j)] for e, j in zip(self.ion_element_index, self.ion_charge)]
         self.ion_symbols = [ion.symbol for ion in self.ions]
-        self.ion_ip_erg = numpy.array([ion.ip_eV * constants.eV if ion.ip_eV is not None else 0.0 for ion in self.ions])
+        self.ion_ip_erg = numpy.array([ion.ip_eV * eV if ion.ip_eV is not None else 0.0 for ion in self.ions])
         self.element_number_density = numpy.array([hydrogen_number_density * self.abundances[s] for s in self.element_symbols])
         self.ion_element_density = self.element_number_density[self.ion_element_index]
 
@@ -119,16 +128,16 @@ class PhotoionizationModel:
         E_max = self.E_max_eV if self.E_max_eV is not None else self.source.E_max_eV
         self.E_edges = numpy.geomspace(E_min, E_max, self.N_nu + 1)
         self.E_eV = numpy.sqrt(self.E_edges[1:] * self.E_edges[:-1])   # ビンの代表エネルギー（幾何平均）
-        self.E_erg = self.E_eV * constants.eV
+        self.E_erg = self.E_eV * eV
 
         # 光電離断面積 σ [cm^2] と加熱断面積 Σ σ_k (E - I_k) [erg cm^2] の行列 (N_ions, N_nu)
         self.sigma_matrix = numpy.array([ion.photoionization_cross_section(self.E_eV) for ion in self.ions])
         self.heating_matrix = numpy.array([ion.photoionization_heating_cross_section(self.E_eV) for ion in self.ions])
 
         # Compton 散乱: 1 回の散乱で電子が得る平均エネルギー E^2/(m_e c^2) (1 - 21E/(5 m_e c^2)) と失うエネルギー 4kT E/(m_e c^2)
-        x = self.E_eV / constants.m_e_c2_eV
-        self.compton_heating_weight = constants.sigma_T * self.E_erg * x * numpy.maximum(1.0 - 21.0 / 5.0 * x, 0.0)  # [erg cm^2]
-        self.compton_cooling_weight = constants.sigma_T * 4.0 * x                                                      # [cm^2]（× kT）
+        x = self.E_eV / m_e_c2_eV
+        self.compton_heating_weight = sigma_T * self.E_erg * x * numpy.maximum(1.0 - 21.0 / 5.0 * x, 0.0)  # [erg cm^2]
+        self.compton_cooling_weight = sigma_T * 4.0 * x                                                      # [cm^2]（× kT）
 
         # 光源: ビンごとの光子放出率 [s^-1]
         self.Q_bin = self.source.photon_rate_per_bin(self.E_edges)
@@ -160,7 +169,7 @@ class PhotoionizationModel:
                     lower_symbol = self.ions[k - 1].symbol
                     if lower_symbol in case_B:
                         alpha_RR[k] = case_B[lower_symbol](T)
-                        rr_cooling[k] = alpha_RR[k] * constants.k_B * T * atomic_data.radiative_recombination_energy_factor(T, ion.charge)
+                        rr_cooling[k] = alpha_RR[k] * k_B * T * atomic_data.radiative_recombination_energy_factor(T, ion.charge)
                         alpha_DR[k] = 0.0
                         dr_cooling[k] = 0.0
         self.alpha_RR_table = _log10_table(alpha_RR)
@@ -310,7 +319,7 @@ class PhotoionizationModel:
 
                         def cooling_terms(T):
                             alpha_RR, alpha_DR, rr_cooling, dr_cooling, q_CI = self.rates_at(T)
-                            kT = constants.k_B * T
+                            kT = k_B * T
                             terms = {
                                 "line": numpy.sum(n_ion * self.line_cooling.rate(T, line_table)),
                                 "recombination_RR": numpy.sum(n_e * n_ion * rr_cooling),

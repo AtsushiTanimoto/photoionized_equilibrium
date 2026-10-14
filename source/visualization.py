@@ -4,11 +4,16 @@
   単独で実行すると data/*.tsv を読んで再描画する
 """
 import matplotlib.pyplot
+import astropy.constants
+import astropy.units
 import numpy
 import os
 import seaborn
 
 import constants
+
+# 物理定数 (cgs、astropy.constants の CODATA 値)
+pc = astropy.constants.pc.cgs.value  # パーセク [cm]
 
 # figureディレクトリのパス（プロジェクトルート直下）
 FIGURE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "figures")
@@ -107,7 +112,7 @@ def plot_radial_profiles(model=None, prefix="simulation", table=None, radius=Non
         fractions = {element.element: model.fraction_array[e] for e, element in enumerate(model.elements)}
     else:
         fractions = _fractions_by_element(table)
-    r_pc = radius / constants.pc
+    r_pc = radius / pc
     symbols = elements if elements is not None else sorted(fractions.keys(), key=lambda s: constants.ATOMIC_NUMBER[s])
     for symbol in symbols:
         fraction = fractions[symbol]
@@ -118,7 +123,7 @@ def plot_radial_profiles(model=None, prefix="simulation", table=None, radius=Non
             if numpy.max(fraction[:, j]) > 1e-6:
                 ax.plot(r_pc, fraction[:, j], linewidth=2, label=f"{symbol} {ROMAN[j]}")
         if R_s_cm is not None:
-            ax.axvline(R_s_cm / constants.pc, linestyle="--", color="gray", label="$R_s$")
+            ax.axvline(R_s_cm / pc, linestyle="--", color="gray", label="$R_s$")
         ax.set_xlabel("Distance from Star [pc]")
         ax.set_ylabel("Ionization Fraction")
         ax.set_ylim([-0.05, 1.40])

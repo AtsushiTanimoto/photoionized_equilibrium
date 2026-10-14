@@ -1,24 +1,9 @@
 """
-物理定数の定義 (cgs単位系) と原子データベースのパス、元素表・存在比
+原子データベースのパス、元素表・存在比、制動放射の係数（物理定数は各モジュールで astropy.constants から取る）
 """
 
-import astropy.constants
-import astropy.units
-
-# --- 物理定数 (cgs単位系、astropy.constants の CODATA 値) ---
-h = astropy.constants.h.cgs.value                      # プランク定数 [erg s]
-c = astropy.constants.c.cgs.value                      # 光速度 [cm s^-1]
-k_B = astropy.constants.k_B.cgs.value                  # ボルツマン定数 [erg K^-1]
-eV = (1.0 * astropy.units.eV).to(astropy.units.erg).value  # 電子ボルト [erg]
-m_e = astropy.constants.m_e.cgs.value                  # 電子質量 [g]
-sigma_T = astropy.constants.sigma_T.cgs.value          # トムソン断面積 [cm^2]
-m_e_c2_eV = (astropy.constants.m_e * astropy.constants.c**2).to(astropy.units.eV).value  # 電子の静止エネルギー [eV]
-Lambda_ff_0 = 1.42e-27  # 制動放射冷却係数 [erg cm^3 s^-1 K^-0.5]
-R_sun = astropy.constants.R_sun.cgs.value              # 太陽半径 [cm]
-pc = astropy.constants.pc.cgs.value                    # パーセク [cm]
-Ry = astropy.constants.Ryd.cgs.value * h * c           # リュードベリ [erg]
-CM_INVERSE_TO_EV = (h * c / eV)                        # 1 cm^-1 のエネルギー [eV]
-T_HI = 13.598434 * eV / k_B                            # 水素の電離ポテンシャル / k_B [K]
+# --- 制動放射 ---
+Lambda_ff_0 = 1.42e-27  # 制動放射冷却係数 [erg cm^3 s^-1 K^-0.5] (物理定数は各モジュールで astropy.constants を直接使う)
 
 # --- 原子データベース ---
 # 光電離断面積（電離限界振動数を含む）は FAC 原子データベースから読み込む (atomic_data.py)

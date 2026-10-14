@@ -12,11 +12,20 @@
 イオンは電荷 j (0: 中性, ..., Z: 裸) で指定する。CHIANTI のイオン番号 (分光学的記法) は j+1、
 MONACO/XSTAR の CSV のイオン記号は <元素><電子数 2 桁> (例: Fe24 = Fe III? ではなく 24 電子 = Fe III)。
 """
+import astropy.constants
+import astropy.units
 import numpy
 import os
 import scipy.interpolate
 
 import constants
+
+# 物理定数 (cgs、astropy.constants の CODATA 値)
+k_B = astropy.constants.k_B.cgs.value  # ボルツマン定数 [erg K^-1]
+eV = astropy.units.eV.to(astropy.units.erg)  # 電子ボルト [erg]
+m_e = astropy.constants.m_e.cgs.value  # 電子質量 [g]
+CM_INVERSE_TO_EV = (astropy.constants.h * astropy.constants.c / astropy.units.cm).to(astropy.units.eV).value  # 1 cm^-1 のエネルギー [eV]
+T_HI = (13.598434 * astropy.units.eV / astropy.constants.k_B).to(astropy.units.K).value  # 水素の電離ポテンシャル / k_B [K]
 
 
 
@@ -60,7 +69,7 @@ def ionization_potential(Z, charge):
                 columns = line.split()
                 if len(columns) < 3 or line.strip() == "-1":
                     break
-                _ionization_potentials[(int(columns[0]), int(columns[1]))] = float(columns[2]) * constants.CM_INVERSE_TO_EV
+                _ionization_potentials[(int(columns[0]), int(columns[1]))] = float(columns[2]) * CM_INVERSE_TO_EV
     return _ionization_potentials[(Z, charge + 1)]
 
 
@@ -127,15 +136,15 @@ def radiative_recombination_energy_factor(T_gas, charge):
     """
     放射再結合で持ち去られる電子の平均運動エネルギー ⟨E⟩ を kT で割った値。
     水素様イオン (電荷 charge のイオンへの再結合) の Case A の値 (Hui & Gnedin 1997 のフィット β_A/(α_A kT)) を
-    温度を T/charge^2 にスケールして使う（低温で ≈ 0.7、高温 T ≫ charge^2 constants.T_HI で ≈ 0.3）。
+    温度を T/charge^2 にスケールして使う（低温で ≈ 0.7、高温 T ≫ charge^2 T_HI で ≈ 0.3）。
     非水素様イオンにもこの近似を用いる。
     """
     T_gas = numpy.asarray(T_gas, dtype=float)
     z = max(charge, 1)
-    lam = 2.0 * z**2 * constants.T_HI / T_gas
+    lam = 2.0 * z**2 * T_HI / T_gas
     alpha = 1.269e-13 * lam**1.503 / (1.0 + (lam / 0.522)**0.47)**1.923
     beta = 1.778e-29 * (T_gas / z**2) * lam**1.965 / (1.0 + (lam / 0.541)**0.502)**2.697
-    return beta / (alpha * constants.k_B * T_gas / z**2)
+    return beta / (alpha * k_B * T_gas / z**2)
 
 
 def dielectronic_recombination_rate(T_gas, dr_energies, dr_coefficients):
@@ -153,7 +162,7 @@ def dielectronic_recombination_cooling(T_gas, dr_energies, dr_coefficients):
     各項の共鳴エネルギー k_B E_i を捕獲される電子が持ち去るとみなす: Λ_DR/(n_e n) = T^(-3/2) Σ_i c_i k_B E_i exp(-E_i/T)
     """
     T_gas = numpy.asarray(T_gas, dtype=float)[..., None]
-    return numpy.sum(dr_coefficients * constants.k_B * dr_energies * numpy.exp(-dr_energies / T_gas), axis=-1) * numpy.squeeze(T_gas, axis=-1)**-1.5
+    return numpy.sum(dr_coefficients * k_B * dr_energies * numpy.exp(-dr_energies / T_gas), axis=-1) * numpy.squeeze(T_gas, axis=-1)**-1.5
 
 
 def load_chianti_direct_ionization(element, charge):
@@ -213,8 +222,8 @@ def direct_ionization_rate(T_gas, shells, N_u=400):
     u = numpy.geomspace(1.0, 1.0e4, N_u)
     E = I_min * u                                       # [eV]
     sigma = direct_ionization_cross_section(E, shells)  # [cm^2]
-    v = numpy.sqrt(2.0 * E * constants.eV / constants.m_e)                  # [cm s^-1]
-    kT = constants.k_B * T_gas[..., None] / constants.eV                     # [eV]
+    v = numpy.sqrt(2.0 * E * eV / m_e)                  # [cm s^-1]
+    kT = k_B * T_gas[..., None] / eV                     # [eV]
     f_E = 2.0 * numpy.sqrt(E / numpy.pi) * kT**-1.5 * numpy.exp(-numpy.minimum(E / kT, 700.0))  # [eV^-1]
     return numpy.trapezoid(sigma * v * f_E, E, axis=-1)
 
@@ -276,7 +285,7 @@ def photoionization_heating_cross_section(E_eV, channels):
     E = numpy.asarray(E_eV, dtype=float)
     heating = numpy.zeros_like(E)
     for I, Sigma0, Gamma, tau in channels:
-        heating += numpy.where(E < I, 0.0, Sigma0 * (E / I)**Gamma * numpy.exp(-E / tau) * (E - I) * constants.eV)
+        heating += numpy.where(E < I, 0.0, Sigma0 * (E / I)**Gamma * numpy.exp(-E / tau) * (E - I) * eV)
     return heating
 
 
@@ -338,7 +347,7 @@ class IonData:
         T_gas = numpy.asarray(T_gas, dtype=float)
         if self.rr_type is None:
             return numpy.zeros_like(T_gas)
-        return self.alpha_RR(T_gas) * constants.k_B * T_gas * radiative_recombination_energy_factor(T_gas, self.charge)
+        return self.alpha_RR(T_gas) * k_B * T_gas * radiative_recombination_energy_factor(T_gas, self.charge)
 
     def alpha_DR(self, T_gas):
         """二電子再結合係数 (このイオン → 1 階下) [cm^3 s^-1]"""

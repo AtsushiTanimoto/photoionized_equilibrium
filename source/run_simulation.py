@@ -1,6 +1,8 @@
 """
 HII 領域モデル（黒体星に照らされた一様密度ガス球、H + He + C + N）の光電離平衡計算のメインスクリプト
 """
+import astropy.constants
+import astropy.units
 import numpy
 import time
 
@@ -9,13 +11,17 @@ import source
 import visualization
 import constants
 
+# 物理定数 (cgs、astropy.constants の CODATA 値)
+R_sun = astropy.constants.R_sun.cgs.value  # 太陽半径 [cm]
+pc = astropy.constants.pc.cgs.value  # パーセク [cm]
+
 
 if __name__ == "__main__":
     time_start = time.time()
-    radius_edges            = numpy.linspace(0.0, 1.0, 101) * constants.pc      # セル境界 [cm]
-    radius_edges[0]         = 1.0e-3 * constants.pc                             # 中心は特異点なので小さくずらす
+    radius_edges            = numpy.linspace(0.0, 1.0, 101) * pc      # セル境界 [cm]
+    radius_edges[0]         = 1.0e-3 * pc                             # 中心は特異点なので小さくずらす
     hydrogen_number_density = 1.000e+04                               # [cm^-3]
-    light_source            = source.BlackbodySource(T_BB=4.0e4, radius_cm=10.0 * constants.R_sun)  # O 型星
+    light_source            = source.BlackbodySource(T_BB=4.0e4, radius_cm=10.0 * R_sun)  # O 型星
 
     model = equilibrium.PhotoionizationModel(
         radius_edges=radius_edges, hydrogen_number_density=hydrogen_number_density, source=light_source,

@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 全元素（H〜Zn のうち原子データがあるもの）を共通の枠組みで扱い、XSTAR の計算（`benchmark/xstar/` に出力を同梱。
 kT = 2.5 keV の黒体、log ξ = 3.5、n = 10⁹ cm⁻³、N_H = 10²¹ cm⁻²、`run_xstar.command` が入力パラメータ）との比較を主目的とする。
 将来は同じ計算を MONACO（`~/software/monaco`）の中に C++ で実装する予定で、このコードはその試作。
-単位系は cgs、エネルギーは eV で扱う。コメントや出力メッセージは日本語。
+単位系は cgs、エネルギーは eV で扱う。物理定数は各モジュールの先頭で `astropy.constants` / `astropy.units` から cgs 値を取って定義する（`constants.py` には置かない）。コメントや出力メッセージは日本語。
 
 ## 実行方法
 
@@ -38,7 +38,7 @@ python3 visualization.py --file ../data/benchmark.tsv [--radial]   # TSV から�
 
 依存関係は `constants.py` → `atomic_data.py`, `line_cooling.py`, `recombination.py`, `bremsstrahlung.py`, `source.py` → `equilibrium.py` → `run_simulation.py` / `benchmark/run_benchmark.py` / `benchmark/compare_xstar.py` の一方向。`visualization.py` はモデルの属性か TSV の辞書を読むだけ。
 
-- **`constants.py`**: 物理定数（`astropy.constants` の cgs 値。制動放射の係数 `Lambda_ff_0` だけ直書き。リュードベリ `Ry`、`CM_INVERSE_TO_EV`、`T_HI` もここで定義）、DB のパス、元素表 `ELEMENT_SYMBOLS`/`ATOMIC_NUMBER`、太陽組成 `ABUNDANCES_ANGR`（XSTAR の angr）、`BENCHMARK_ELEMENTS`（MONACO の PhotoionizedPlasma と同じ 15 元素）。
+- **`constants.py`**: DB のパス、制動放射の係数 `Lambda_ff_0`、元素表 `ELEMENT_SYMBOLS`/`ATOMIC_NUMBER`、太陽組成 `ABUNDANCES_ANGR`（XSTAR の angr）、`BENCHMARK_ELEMENTS`（MONACO の PhotoionizedPlasma と同じ 15 元素）。
 - **`atomic_data.py`**: `get_element(symbol)` → `ElementData`（`ions[j]` は電荷 j の `IonData`、j = 0〜Z）。`IonData` は光電離断面積（MONACO と同じ式 σ = Σ Σ0 (E/I)^Γ exp(−E/τ)、閾値は CHIANTI の実験値に合わせて全チャネルを同じ量だけずらす）、加熱断面積 Σ σ_k (E − I_k)、このイオンから 1 階下への再結合 α_RR（Badnell type 1/2、Shull & Van Steenberg type 3）・α_DR（type 1、type 2 は 2 項に変換）、再結合冷却（RR は Hui & Gnedin 1997 の水素様 Case A の ⟨E⟩/kT を T/z² でスケール、DR は共鳴エネルギー k E_i で重み付け）、衝突電離 q_CI（Dere 2007 の diparams を Maxwell 分布で数値積分。励起自動電離 easplups は未実装）を与える。`ElementData.min_charge` は FAC データのある最低電荷で、それより低い電離段階は扱わない（鉄なら Fe XVII 以上）。
 - **`line_cooling.py`**: CHIANTI の多準位モデルによる衝突励起冷却（低い方から `N_LEVELS_MAX` = 20 準位、温度グリッド 1〜10⁸ K）。`LineCoolingSet(names)` でイオンをまとめ、`.table(n_e, n_HI, fractions)` で表を作り `.rate(T, table)` で内挿する。`.scups` がないイオン（Cr, Mn の低電離段階など）は冷却ゼロ。C I/C II の微細構造準位は H 原子衝突も含む。C IV の `.elvlc` は `,` 以降に余分な列があるのでパーサは `,` の前だけを使う。
 - **`source.py`**: `BlackbodySource(T_BB, radius_cm=… | luminosity=…)`（光度指定は XSTAR の bbody と同じ 1〜1000 Ry で規格化）と `TabulatedSource.from_xstar(xout_spect1.fits)`。ビンごとの光子放出率とパケットの多項分布サンプリングを持つ。

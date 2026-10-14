@@ -5,9 +5,16 @@
 いずれも luminosity_density(E) [erg s^-1 eV^-1] を与え、エネルギービンごとの光子放出率と
 モンテカルロのパケットのサンプリングを共通に扱う。
 """
+import astropy.constants
+import astropy.units
 import numpy
 
-import constants
+
+# 物理定数 (cgs、astropy.constants の CODATA 値)
+h = astropy.constants.h.cgs.value  # プランク定数 [erg s]
+c = astropy.constants.c.cgs.value  # 光速度 [cm s^-1]
+k_B = astropy.constants.k_B.cgs.value  # ボルツマン定数 [erg K^-1]
+eV = astropy.units.eV.to(astropy.units.erg)  # 電子ボルト [erg]
 
 
 class Source:
@@ -21,7 +28,7 @@ class Source:
     def photon_rate_density(self, E_eV):
         """光子放出率のスペクトル [photons s^-1 eV^-1]"""
         E_eV = numpy.asarray(E_eV, dtype=float)
-        return self.luminosity_density(E_eV) / (E_eV * constants.eV)
+        return self.luminosity_density(E_eV) / (E_eV * eV)
 
     def photon_rate_in_band(self, E_lo_eV, E_hi_eV, N=20001):
         """[E_lo, E_hi] の光子放出率 [s^-1]（対数グリッドで台形積分）"""
@@ -64,7 +71,7 @@ class BlackbodySource(Source):
     """
     def __init__(self, T_BB, radius_cm=None, luminosity=None, band_eV=(13.6, 13600.0)):
         self.T_BB = T_BB
-        self.kT_eV = constants.k_B * T_BB / constants.eV
+        self.kT_eV = k_B * T_BB / eV
         self.E_min_eV = 1.0e-3 * self.kT_eV
         self.E_max_eV = 40.0 * self.kT_eV   # exp(-40) まで
         if radius_cm is None and luminosity is None:
@@ -82,7 +89,7 @@ class BlackbodySource(Source):
         """L_E [erg s^-1 eV^-1]: B_E = 2 E^3 / (h^3 c^2) / (exp(E/kT) - 1) に規格化定数をかける（E は eV）"""
         E_eV = numpy.asarray(E_eV, dtype=float)
         x = numpy.minimum(E_eV / self.kT_eV, 700.0)
-        B_E = 2.0 * (E_eV * constants.eV)**3 / (constants.h**3 * constants.c**2) / numpy.expm1(x) * constants.eV  # [erg s^-1 cm^-2 sr^-1 eV^-1]
+        B_E = 2.0 * (E_eV * eV)**3 / (h**3 * c**2) / numpy.expm1(x) * eV  # [erg s^-1 cm^-2 sr^-1 eV^-1]
         return self._normalization * B_E
 
 
@@ -111,5 +118,5 @@ class TabulatedSource(Source):
         import astropy.io.fits
         data = astropy.io.fits.open(filepath)["XSTAR_SPECTRA"].data
         E_eV = data["energy"].astype(float)
-        L_E = data[column].astype(float) * 1.0e38 * constants.eV   # erg s^-1 erg^-1 → erg s^-1 eV^-1
+        L_E = data[column].astype(float) * 1.0e38 * eV   # erg s^-1 erg^-1 → erg s^-1 eV^-1
         return cls(E_eV, L_E)
