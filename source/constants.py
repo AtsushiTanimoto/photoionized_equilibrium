@@ -1,22 +1,46 @@
 """
-物理定数の定義 (cgs単位系)
+物理定数の定義 (cgs単位系) と原子データベースのパス、元素表・存在比
 """
 
 # --- 物理定数 (cgs単位系) ---
 h = 6.62607015e-27  # プランク定数 [erg s]
 c = 2.99792458e10   # 光速度 [cm s^-1]
 k_B = 1.380649e-16  # ボルツマン定数 [erg K^-1]
+eV = 1.602176634e-12  # 電子ボルト [erg]
+m_e = 9.1093837015e-28  # 電子質量 [g]
+sigma_T = 6.6524587321e-25  # トムソン断面積 [cm^2]
+m_e_c2_eV = 510998.95  # 電子の静止エネルギー [eV]
 Lambda_ff_0 = 1.42e-27  # 制動放射冷却係数 [erg cm^3 s^-1 K^-0.5]
+R_sun = 6.957e10  # 太陽半径 [cm]
+pc = 3.0856775814913673e18  # パーセク [cm]
 
-# 電離限界振動数
-HI_nu0     = 3.288e15     # 水素の電離限界振動数 (13.6 eV) [Hz]
-HeII_nu0    = 1.316e16  # He II 電離限界振動数 (54.42 eV) [Hz]
-HeI_nu0    = 5.945e15   # He I 電離限界振動数 (24.59 eV) [Hz]
+# --- 原子データベース ---
+# 光電離断面積（電離限界振動数を含む）は FAC 原子データベースから読み込む (atomic_data.py)
+ATOMIC_DATA_DIR = "/Users/tanimoto/software/database/atomic_data"
+# 再結合係数（放射・二電子）、衝突電離断面積、電離ポテンシャル、輝線冷却のデータは CHIANTI から読み込む
+CHIANTI_DIR = "/Users/tanimoto/software/database/chianti"
 
-# 光電離断面積
-HI_a0      = 6.304e-18     # 水素の光電離断面積（電離限界での値）[cm^2]
-HeII_a0     = 1.58e-18
-HeI_a0     = 7.42e-18
+# --- 元素 ---
+ELEMENT_SYMBOLS = [
+    "H", "He",
+    "Li", "Be", "B", "C", "N", "O", "F", "Ne",
+    "Na", "Mg", "Al", "Si", "P", "S", "Cl", "Ar",
+    "K", "Ca", "Sc", "Ti", "V", "Cr", "Mn", "Fe",
+    "Co", "Ni", "Cu", "Zn"]
+ATOMIC_NUMBER = {symbol: z + 1 for z, symbol in enumerate(ELEMENT_SYMBOLS)}
 
-# --- ヘリウム ---
+# 太陽組成 (Anders & Grevesse 1989、XSTAR の abundtbl=angr) の H に対する数密度比
+ABUNDANCES_ANGR = {
+    "H": 1.000e+00, "He": 9.770e-02, "Li": 1.450e-11, "Be": 1.410e-11, "B": 3.980e-10,
+    "C": 3.630e-04, "N": 1.120e-04, "O": 8.510e-04, "F": 3.630e-08, "Ne": 1.230e-04,
+    "Na": 2.140e-06, "Mg": 3.800e-05, "Al": 2.950e-06, "Si": 3.550e-05, "P": 2.820e-07,
+    "S": 1.620e-05, "Cl": 3.160e-07, "Ar": 3.630e-06, "K": 1.320e-07, "Ca": 2.290e-06,
+    "Sc": 1.260e-09, "Ti": 9.770e-08, "V": 1.000e-08, "Cr": 4.680e-07, "Mn": 2.450e-07,
+    "Fe": 4.680e-05, "Co": 8.320e-08, "Ni": 1.780e-06, "Cu": 1.620e-08, "Zn": 3.980e-08}
+
+# MONACO の PhotoionizedPlasma 物理リストが扱う元素 (XSTAR ベンチマークの比較対象)
+BENCHMARK_ELEMENTS = ["H", "He", "C", "N", "O", "Ne", "Mg", "Si", "S", "Ar", "Ca", "Cr", "Mn", "Fe", "Ni"]
+
+# --- 従来の HII 領域モデル (H + He + C) の存在比 ---
 Y_He        = 0.1            # ヘリウム存在比 (n_He / n_H)
+A_C         = 10**(8.46 - 12.0)  # 炭素存在比 (n_C / n_H): 太陽組成 Asplund et al. (2021)

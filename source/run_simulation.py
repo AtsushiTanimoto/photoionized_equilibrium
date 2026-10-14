@@ -1,29 +1,34 @@
 """
-光電離平衡計算のメインスクリプト
+HII 領域モデル（黒体星に照らされた一様密度ガス球、H + He + C）の光電離平衡計算のメインスクリプト
 """
-import astropy.constants
-import astropy.units
 import numpy
+import time
 
 import equilibrium
+import source
 import visualization
+from constants import pc, R_sun, Y_He, A_C
 
 
 if __name__ == "__main__":
-    radius_grid_array       = numpy.linspace(0.000e+00, 1.000e+00, 1001)*astropy.constants.pc.to(astropy.units.cm)
-    hydrogen_number_density = 1.000e+04
-    number_of_energy        = 1001
+    time_start = time.time()
+    radius_edges            = numpy.linspace(0.0, 1.0, 101) * pc      # セル境界 [cm]
+    radius_edges[0]         = 1.0e-3 * pc                             # 中心は特異点なので小さくずらす
+    hydrogen_number_density = 1.000e+04                               # [cm^-3]
+    light_source            = source.BlackbodySource(T_BB=4.0e4, radius_cm=10.0 * R_sun)  # O 型星
 
-    # デフォルトのパラメータで計算器を初期化
-    model = equilibrium.PhotoionizationModel(radius_grid_array=radius_grid_array, hydrogen_number_density=hydrogen_number_density,
-        T_gas=1e4,        # ガスの温度 [K] (通常HII領域では約1万度)
-        T_BB=4e4,         # 星の黒体放射温度 [K] (例: 高温なO型星)
-        R_star_solar=10.0,  # 星の半径 (太陽半径の10倍と仮定)
-        N_nu=number_of_energy,         # 振動数分割数
-    )
-    
-    # 計算の実行
+    model = equilibrium.PhotoionizationModel(
+        radius_edges=radius_edges, hydrogen_number_density=hydrogen_number_density, source=light_source,
+        elements=["H", "He", "C"], abundances={"H": 1.0, "He": Y_He, "C": A_C},
+        T_gas=1e4,                  # ガスの初期温度 [K]
+        N_nu=1001,                  # エネルギービン数
+        recombination_case="B")     # H, He は Case B
     model.setup_grids()
-    model.calculate_equilibrium(N_packets=2000000, max_global_iterations=1)
-    visualization.plot_results(model)
-    model.save_tsv()
+    model.calculate_equilibrium(N_packets=200000, max_global_iterations=1, max_local_iterations=100)
+    print("Plotting results...", flush=True)
+    visualization.plot_radial_profiles(model, prefix="hii_region")
+    print("Saving results to TSV...", flush=True)
+    print(model.save_tsv("hii_region.tsv"))
+    print(model.save_heating_cooling_tsv("hii_region_heating_cooling.tsv"))
+    print("Done.", flush=True)
+    print(f"Computation time: {(time.time() - time_start) / 60.0:.3e} min", flush=True)

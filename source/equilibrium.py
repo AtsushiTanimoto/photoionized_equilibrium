@@ -1,304 +1,449 @@
 """
-光電離平衡を計算する PhotoionizationModel クラスの定義
+光電離平衡（電離平衡 + 熱平衡）を計算する PhotoionizationModel クラスの定義
+
+全元素・全電離段階を共通に扱う。各セルで、光子パケットのパスレングス・エスティメータから
+局所の光子フラックス（エネルギービンごと）を求め、
+  電離平衡: 光電離 + 衝突電離 vs 放射再結合 + 二電子再結合
+  熱平衡:   光電離加熱 + Compton 加熱 vs 輝線冷却 + 再結合冷却 (RR, DR) + 衝突電離冷却 + 制動放射 + Compton 冷却
+を局所反復で解く。
 """
 import numpy
 import os
-import scipy.integrate
 import scipy.optimize
 import time
 
-from constants import h, k_B, HI_nu0, HeII_nu0, HeI_nu0, Lambda_ff_0, Y_He
-from physics import (g_ff, HI_alphaB, HeII_alphaB, HeI_alphaB, HI_anu, HeII_anu, HeI_anu, B_nu)
+from constants import k_B, eV, sigma_T, m_e_c2_eV, Lambda_ff_0, ABUNDANCES_ANGR, BENCHMARK_ELEMENTS
+from atomic_data import get_element, radiative_recombination_energy_factor
+from bremsstrahlung import g_ff
+from line_cooling import LineCoolingSet
+from recombination import HI_alphaB, HeI_alphaB, HeII_alphaB
 
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 
+# 再結合係数・衝突電離係数の表の温度グリッド [K] (log10 T = 0, ..., 9)
+LOG_T_RATE_GRID = numpy.linspace(0.0, 9.0, 451)
+T_RATE_GRID = 10**LOG_T_RATE_GRID
+T_MIN = 10.0      # 熱収支を解く温度範囲 [K]
+T_MAX = 1.0e9
+
+
+def _interpolate_log_table(T, table):
+    """log T について線形内挿する（table は形状 (N, len(T_RATE_GRID)) の log10 値）。戻り値は長さ N。"""
+    log_T = numpy.clip(numpy.log10(T), LOG_T_RATE_GRID[0], LOG_T_RATE_GRID[-1])
+    k = min(max(int(numpy.searchsorted(LOG_T_RATE_GRID, log_T)), 1), len(LOG_T_RATE_GRID) - 1)
+    w = (log_T - LOG_T_RATE_GRID[k - 1]) / (LOG_T_RATE_GRID[k] - LOG_T_RATE_GRID[k - 1])
+    return 10**((1.0 - w) * table[:, k - 1] + w * table[:, k])
+
+
+def _log10_table(values):
+    return numpy.log10(numpy.maximum(values, 1e-300))
+
 
 class PhotoionizationModel:
-    """光電離平衡を計算するクラス（水素 + ヘリウム）"""
-    def __init__(self, radius_grid_array, hydrogen_number_density, T_gas=1e4, T_BB=4e4, R_star_solar=10.0, N_nu=1001):
-        self.radius_grid_array          = radius_grid_array
-        self.hydrogen_number_density    = hydrogen_number_density            # 全水素数密度 [cm^-3]
-        self.helium_number_density      = hydrogen_number_density * Y_He    # 全ヘリウム数密度 [cm^-3]
-        self.T_gas_init                 = T_gas   # ガスの初期温度 [K]
-        self.T_BB                       = T_BB          # 星の黒体放射温度 [K]
-        self.R_star_cm                  = R_star_solar * 6.96e10  # 星の半径 [cm]
-        self.N_nu                       = N_nu          # 振動数グリッドの分割数
-        self.nu_grid                    = None
-        self.a_nu_grid                  = None
-        self.B_nu_grid                  = None
-        self.R_s_cm                     = None
-        self.R_s_pc                     = None
-        self.N_r                        = len(self.radius_grid_array)
-        self.r_cm                       = None
-        self.r_pc                       = None
-        self.HI_fraction_array          = numpy.ones(self.N_r)
-        self.HII_fraction_array         = numpy.zeros(self.N_r)
-        self.HeI_fraction_array         = numpy.ones(self.N_r)
-        self.HeII_fraction_array        = numpy.zeros(self.N_r)
-        self.HeIII_fraction_array       = numpy.zeros(self.N_r)
-        self.temperature_array          = numpy.full(self.N_r, float(self.T_gas_init))
-
-    def _solve_ionization_balance(self, Gammas, alphas, n_e):
+    """光電離平衡を計算するクラス（任意の元素の組）"""
+    def __init__(self, radius_edges, hydrogen_number_density, source,
+                 elements=BENCHMARK_ELEMENTS, abundances=ABUNDANCES_ANGR,
+                 T_gas=1e4, N_nu=2000, E_min_eV=None, E_max_eV=None,
+                 recombination_case="A", N_levels_max=None):
         """
-        隣接する電離状態間のバランスから、各電離状態の割合を計算する汎用関数。
-         Gammas: [Gamma_{0->1}, Gamma_{1->2}, ...] (例: [Gamma_HeI, Gamma_HeII])
-         alphas: [alpha_{1->0}, alpha_{2->1}, ...] (例: [alpha_HeI, alpha_HeII])
-         n_e: 電子密度
-         戻り値: [x_0, x_1, ..., x_N] (中性, 1階電離, 2階電離...)
+        radius_edges:            半径セルの境界 [cm]（長さ N_r + 1、昇順）
+        hydrogen_number_density: 全水素数密度 [cm^-3]（一様）
+        source:                  光源 (source.Source)
+        elements:                扱う元素記号のリスト
+        abundances:              H に対する数密度比の辞書
+        T_gas:                   温度の初期値 [K]
+        N_nu:                    エネルギービンの数
+        E_min_eV, E_max_eV:      エネルギービンの範囲 [eV]（省略時は最低の電離閾値から光源の上限まで）
+        recombination_case:      "A" (CHIANTI の RR+DR) または "B" (H, He のみ Case B の近似式に置き換える; HII 領域向け)
+        N_levels_max:            輝線冷却で考慮する準位数（省略時は line_cooling.N_LEVELS_MAX）
         """
-        N = len(Gammas)
-        r = numpy.zeros(N)
-        for i in range(N):
-            if Gammas[i] > 1e-30:
-                if n_e > 0:
-                    r[i] = alphas[i] * n_e / Gammas[i]
-                else:
-                    r[i] = 0.0  # 電子がないため再結合できず、即座に上位の電離状態に移行する
-            else:
-                r[i] = 1e30  # 光電離が起きない場合は低電離状態に偏る
-                
-        # ratio[i] = n_i / n_N の比を計算
-        ratio = numpy.ones(N + 1)
-        for i in range(N - 1, -1, -1):
-            ratio[i] = ratio[i+1] * r[i]
-            
-        # 規格化して割合を返す
-        return ratio / numpy.sum(ratio)
+        self.radius_edges = numpy.asarray(radius_edges, dtype=float)
+        self.N_r = len(self.radius_edges) - 1
+        self.r_cm = 0.5 * (self.radius_edges[1:] + self.radius_edges[:-1])
+        self.dr_cm = numpy.diff(self.radius_edges)
+        self.r_pc = self.r_cm / 3.0856775814913673e18
+        self.hydrogen_number_density = hydrogen_number_density
+        self.source = source
+        self.element_symbols = list(elements)
+        self.abundances = {symbol: abundances[symbol] for symbol in self.element_symbols}
+        self.T_gas_init = float(T_gas)
+        self.N_nu = N_nu
+        self.E_min_eV = E_min_eV
+        self.E_max_eV = E_max_eV
+        self.recombination_case = recombination_case
+        self.N_levels_max = N_levels_max
 
+        # 原子データ
+        self.elements = [get_element(symbol) for symbol in self.element_symbols]
+        # 全イオンの一覧（元素ごとに電荷 min_charge, ..., Z）
+        self.ion_element_index = []   # イオン → 元素のインデックス
+        self.ion_charge = []          # イオン → 電荷
+        self.ion_offset = []          # 元素 → ion_list 内の最初のイオン（電荷 min_charge）の位置
+        for e, element in enumerate(self.elements):
+            self.ion_offset.append(len(self.ion_charge))
+            for charge in range(element.min_charge, element.Z + 1):
+                self.ion_element_index.append(e)
+                self.ion_charge.append(charge)
+        self.ion_element_index = numpy.array(self.ion_element_index)
+        self.ion_charge = numpy.array(self.ion_charge, dtype=float)
+        self.N_ions = len(self.ion_charge)
+        self.ions = [self.elements[e].ions[int(j)] for e, j in zip(self.ion_element_index, self.ion_charge)]
+        self.ion_symbols = [ion.symbol for ion in self.ions]
+        self.ion_ip_erg = numpy.array([ion.ip_eV * eV if ion.ip_eV is not None else 0.0 for ion in self.ions])
+        self.element_number_density = numpy.array([hydrogen_number_density * self.abundances[s] for s in self.element_symbols])
+        self.ion_element_density = self.element_number_density[self.ion_element_index]
 
+        # 状態: 電離状態の割合 fraction_array[e] は形状 (N_r, Z_e + 1)、列 j が電荷 j
+        self.fraction_array = []
+        for element in self.elements:
+            fraction = numpy.zeros((self.N_r, element.Z + 1))
+            fraction[:, element.min_charge] = 1.0   # 初期状態: 扱う最低の電離段階
+            self.fraction_array.append(fraction)
+        self.temperature_array = numpy.full(self.N_r, self.T_gas_init)
+        self.electron_density_array = numpy.zeros(self.N_r)
+        self.heating_array = {}
+        self.cooling_array = {}
+        self.gamma_array = numpy.zeros((self.N_r, self.N_ions))   # 各イオンの光電離率 [s^-1]
 
+        self.E_edges = None
+        self.rate_tables_ready = False
+
+    # ------------------------------------------------------------------
+    # 準備
+    # ------------------------------------------------------------------
     def setup_grids(self):
-        """振動数と距離のグリッド、および初期定数を設定する"""
-        # radius_grid_array [cm] から距離グリッドを設定
-        self.r_cm = numpy.asarray(self.radius_grid_array, dtype=float)
-        self.N_r = len(self.r_cm)
-        self.r_pc = self.r_cm / 3.086e18
+        """エネルギービン、断面積の行列、再結合・衝突電離係数の表、輝線冷却のデータを準備する"""
+        thresholds = [ion.ip_eV for ion in self.ions if ion.has_photoionization_data]
+        E_min = self.E_min_eV if self.E_min_eV is not None else 0.999 * min(thresholds)
+        E_max = self.E_max_eV if self.E_max_eV is not None else self.source.E_max_eV
+        self.E_edges = numpy.geomspace(E_min, E_max, self.N_nu + 1)
+        self.E_eV = numpy.sqrt(self.E_edges[1:] * self.E_edges[:-1])   # ビンの代表エネルギー（幾何平均）
+        self.E_erg = self.E_eV * eV
 
-        # 連続スペクトルの積分を離散化するため、振動数のグリッドを作成
-        # 対数スケールで nu_0 から 1000*nu_0 まで分割
-        self.nu_grid = numpy.linspace(HI_nu0, 1.000e+03*HI_nu0, self.N_nu)
-        self.a_nu_grid = HI_anu(self.nu_grid)
-        self.B_nu_grid = B_nu(self.nu_grid, self.T_BB)
+        # 光電離断面積 σ [cm^2] と加熱断面積 Σ σ_k (E - I_k) [erg cm^2] の行列 (N_ions, N_nu)
+        self.sigma_matrix = numpy.array([ion.photoionization_cross_section(self.E_eV) for ion in self.ions])
+        self.heating_matrix = numpy.array([ion.photoionization_heating_cross_section(self.E_eV) for ion in self.ions])
 
+        # Compton 散乱: 1 回の散乱で電子が得る平均エネルギー E^2/(m_e c^2) (1 - 21E/(5 m_e c^2)) と失うエネルギー 4kT E/(m_e c^2)
+        x = self.E_eV / m_e_c2_eV
+        self.compton_heating_weight = sigma_T * self.E_erg * x * numpy.maximum(1.0 - 21.0 / 5.0 * x, 0.0)  # [erg cm^2]
+        self.compton_cooling_weight = sigma_T * 4.0 * x                                                      # [cm^2]（× kT）
 
-    def calculate_equilibrium(self, max_global_iterations=30, tolerance=1e-3, N_packets=200000):
+        # 光源: ビンごとの光子放出率 [s^-1]
+        self.Q_bin = self.source.photon_rate_per_bin(self.E_edges)
+        self.Q_tot = numpy.sum(self.Q_bin)
+
+        # 再結合係数・衝突電離係数の表（温度グリッド上、log10）
+        self._setup_rate_tables()
+
+        # 輝線冷却（CHIANTI のデータがあるイオンのみ）
+        names = [ion.chianti_name if ion.charge < ion.Z else "none" for ion in self.ions]
+        kwargs = {} if self.N_levels_max is None else {"N_levels_max": self.N_levels_max}
+        self.line_cooling = LineCoolingSet(names, **kwargs)
+        if self.line_cooling.missing:
+            print(f"  line cooling data are missing for: {' '.join(n for n in self.line_cooling.missing if n != 'none')}", flush=True)
+
+    def _setup_rate_tables(self):
+        """再結合 (RR, DR)、二電子再結合冷却、衝突電離の係数を温度グリッド上に表にする"""
+        T = T_RATE_GRID
+        alpha_RR = numpy.array([ion.alpha_RR(T) for ion in self.ions])
+        alpha_DR = numpy.array([ion.alpha_DR(T) for ion in self.ions])
+        rr_cooling = numpy.array([ion.rr_cooling(T) for ion in self.ions])
+        dr_cooling = numpy.array([ion.dr_cooling(T) for ion in self.ions])
+        q_CI = numpy.array([ion.q_CI(T) for ion in self.ions])
+        if self.recombination_case == "B":
+            # HII 領域向け: H II → H I, He II → He I, He III → He II を Case B の近似式に置き換える
+            case_B = {"H01": HI_alphaB, "He02": HeI_alphaB, "He01": HeII_alphaB}
+            for k, ion in enumerate(self.ions):
+                if ion.charge > 0:
+                    lower_symbol = self.ions[k - 1].symbol
+                    if lower_symbol in case_B:
+                        alpha_RR[k] = case_B[lower_symbol](T)
+                        rr_cooling[k] = alpha_RR[k] * k_B * T * radiative_recombination_energy_factor(T, ion.charge)
+                        alpha_DR[k] = 0.0
+                        dr_cooling[k] = 0.0
+        self.alpha_RR_table = _log10_table(alpha_RR)
+        self.alpha_DR_table = _log10_table(alpha_DR)
+        self.rr_cooling_table = _log10_table(rr_cooling)
+        self.dr_cooling_table = _log10_table(dr_cooling)
+        self.q_CI_table = _log10_table(q_CI)
+        self.rate_tables_ready = True
+
+    def rates_at(self, T):
+        """温度 T での全イオンの (α_RR, α_DR, Λ_RR/(n_e n), Λ_DR/(n_e n), q_CI)"""
+        return (_interpolate_log_table(T, self.alpha_RR_table),
+                _interpolate_log_table(T, self.alpha_DR_table),
+                _interpolate_log_table(T, self.rr_cooling_table),
+                _interpolate_log_table(T, self.dr_cooling_table),
+                _interpolate_log_table(T, self.q_CI_table))
+
+    # ------------------------------------------------------------------
+    # 電離平衡
+    # ------------------------------------------------------------------
+    def _ion_fraction_vector(self, i):
+        """セル i の全イオンの割合（ion_list の順）"""
+        x = numpy.empty(self.N_ions)
+        for e, element in enumerate(self.elements):
+            k = self.ion_offset[e]
+            n = element.Z + 1 - element.min_charge
+            x[k:k + n] = self.fraction_array[e][i, element.min_charge:]
+        return x
+
+    def _set_ion_fraction_vector(self, i, x):
+        for e, element in enumerate(self.elements):
+            k = self.ion_offset[e]
+            n = element.Z + 1 - element.min_charge
+            self.fraction_array[e][i, :] = 0.0
+            self.fraction_array[e][i, element.min_charge:] = x[k:k + n]
+
+    def _solve_ionization_balance(self, up_rates, down_rates):
         """
-        モンテカルロ法を利用して光電離平衡の計算を行う（水素 + ヘリウム）
+        隣接する電離状態間のバランスから各電離状態の割合を計算する。
+          up_rates[j]:   電荷 j → j+1 の電離率 [s^-1] (光電離 + 衝突電離)
+          down_rates[j]: 電荷 j+1 → j の再結合率 [s^-1] (n_e α)
+        戻り値: [x_0, ..., x_N] (N = len(up_rates))
+        電離率がゼロなら低電離側に、再結合率がゼロなら高電離側に偏る。オーバーフローを避けるため対数で扱う。
+        """
+        N = len(up_rates)
+        log_x = numpy.zeros(N + 1)
+        for j in range(N):
+            if up_rates[j] <= 0.0:
+                log_x[j + 1:] = -numpy.inf
+                break
+            if down_rates[j] <= 0.0:
+                log_x[:j + 1] = -numpy.inf
+                log_x[j + 1] = 0.0
+                continue
+            log_x[j + 1] = log_x[j] + numpy.log(up_rates[j]) - numpy.log(down_rates[j])
+        log_x -= numpy.max(log_x)
+        x = numpy.exp(log_x)
+        return x / numpy.sum(x)
 
-        光子パケットは H I, He I, He II の3つの吸収体と相互作用する。
-        各セルで光学的厚みは全吸収体の和 τ = (n_HI σ_HI + n_HeI σ_HeI + n_HeII σ_HeII) dr で、
-        各種への配分は不透明度の寄与比で決まる。
-        """        
-        print(f"計算を開始します（グローバル反復法: {N_packets}パケット/反復, H+He）...")
+    def _solve_all_elements(self, Gamma, n_e, T):
+        """全元素の電離平衡を解いて、全イオンの割合（ion_list の順）を返す"""
+        alpha_RR, alpha_DR, _, _, q_CI = self.rates_at(T)
+        alpha = alpha_RR + alpha_DR
+        x = numpy.empty(self.N_ions)
+        for e, element in enumerate(self.elements):
+            k = self.ion_offset[e]
+            n = element.Z + 1 - element.min_charge
+            up = Gamma[k:k + n - 1] + n_e * q_CI[k:k + n - 1]
+            down = n_e * alpha[k + 1:k + n]
+            x[k:k + n] = self._solve_ionization_balance(up, down)
+        return x
+
+    # ------------------------------------------------------------------
+    # 本体
+    # ------------------------------------------------------------------
+    def calculate_equilibrium(self, max_global_iterations=5, N_packets=200000, max_local_iterations=100,
+                              relaxation=0.5, seed=0, fraction_tolerance=1e-4, temperature_tolerance=1e-3,
+                              fixed_temperature=None):
+        """
+        モンテカルロ法（連続吸収法）で光電離平衡を計算する。
+        fixed_temperature を与えると熱収支は解かず、その温度で電離平衡だけを解く
+        （加熱・冷却の内訳は保存されるので、XSTAR などの温度での収支の診断に使える）。
+
+        光子パケットは光源のスペクトルからサンプリングし、エネルギービンごとに数を数える。
+        各セルで全イオンの吸収で重みが exp(-τ) 減衰する。各セルの局所の光子フラックス（ビンごと）
+        c_E = Q_p W_E φ(τ) dr / V から光電離率と加熱率を求め、熱収支 → 電離平衡 の順に局所反復する。
+        散乱（Compton 散乱による光子の輸送）は考慮しない。
+        """
+        if self.E_edges is None:
+            self.setup_grids()
+        rng = numpy.random.default_rng(seed)
+        print(f"Starting calculation ({N_packets} packets/iteration, elements: {' '.join(self.element_symbols)}, "
+              f"{self.N_ions} ions, {self.N_nu} energy bins)...", flush=True)
         time_start_total = time.time()
-        
-        integrand_Q = numpy.pi * self.B_nu_grid / (h * self.nu_grid)
-        Q_cum = scipy.integrate.cumulative_trapezoid(integrand_Q, self.nu_grid, initial=0)
-        Q_tot = 4 * numpy.pi * self.R_star_cm**2 * Q_cum[-1]
-        
-        if Q_cum[-1] > 0:
-            CDF = Q_cum / Q_cum[-1]
-        else:
-            CDF = numpy.linspace(0, 1, len(self.nu_grid))
-            
-        dr = self.r_cm[1] - self.r_cm[0] if self.N_r > 1 else 0
-        V = numpy.maximum(4 * numpy.pi * self.r_cm**2 * dr, 1e-30)
-        Q_p = Q_tot / N_packets
-        
+        V = 4.0 * numpy.pi * self.r_cm**2 * self.dr_cm
+        Q_p = self.Q_tot / N_packets
+        print(f"  N_r = {self.N_r} cells (r = {self.radius_edges[0]:.4e}-{self.radius_edges[-1]:.4e} cm), "
+              f"n_H = {self.hydrogen_number_density:.3e} cm^-3, "
+              f"Q({self.E_edges[0]:.2f}-{self.E_edges[-1]:.3e} eV) = {self.Q_tot:.3e} s^-1", flush=True)
+        progress_interval = max(self.N_r // 20, 1)
+
         for global_it in range(max_global_iterations):
-            previous_HI_fraction = self.HI_fraction_array.copy()
-            previous_HeII_fraction = self.HeII_fraction_array.copy()
-            
-            U_nu = numpy.random.rand(N_packets)
-            nu_packets = numpy.interp(U_nu, CDF, self.nu_grid)
-            
-            # 各パケットの光電離断面積を事前計算
-            HI_sigma_all   = HI_anu(nu_packets)
-            HeII_sigma_all  = HeII_anu(nu_packets)
-            HeI_sigma_all  = HeI_anu(nu_packets)
-            
-            # 各吸収体による余剰エネルギー（加熱に寄与）
-            HI_E_heat_all  = h * numpy.maximum(nu_packets - HI_nu0, 0.0)
-            HeII_E_heat_all = h * numpy.maximum(nu_packets - HeII_nu0, 0.0)
-            HeI_E_heat_all = h * numpy.maximum(nu_packets - HeI_nu0, 0.0)
-            
-            # 連続吸収法: パケットは消滅せず重み W が減衰していく
-            W = numpy.ones(N_packets)
-            active = numpy.ones(N_packets, dtype=bool)
-            
+            previous_fractions = [fraction.copy() for fraction in self.fraction_array]
+            previous_T = self.temperature_array.copy()
+            W = self.source.sample_packet_counts(self.Q_bin, N_packets, rng)   # ビンごとのパケット数（重み 1）
+            N_unconverged_cells = 0
+            time_start_iter = time.time()
+            print(f"Iteration {global_it + 1:2d}/{max_global_iterations}: propagating packets...", flush=True)
+
             for i in range(self.N_r):
-                if not numpy.any(active):
-                    self.HII_fraction_array[i]      = 0.0
-                    self.HI_fraction_array[i]       = 1.0
-                    self.HeIII_fraction_array[i]    = 0.0
-                    self.HeII_fraction_array[i]     = 0.0
-                    self.HeI_fraction_array[i]      = 1.0
-                    self.temperature_array[i]       = 10.0
-                    continue
-                
-                # 局所反復: セル内の電離度・温度と光学的厚みを整合させる
-                HII_fraction_loc    = self.HII_fraction_array[i]
-                HeIII_fraction_loc   = self.HeIII_fraction_array[i]
-                HeII_fraction_loc   = self.HeII_fraction_array[i]
-                HeI_fraction_loc   = self.HeI_fraction_array[i]
-                T_loc               = self.temperature_array[i]
-                HI_sigma           = HI_sigma_all[active]
-                HeII_sigma          = HeII_sigma_all[active]
-                HeI_sigma          = HeI_sigma_all[active]
-                HI_E_heat          = HI_E_heat_all[active]
-                HeII_E_heat         = HeII_E_heat_all[active]
-                HeI_E_heat         = HeI_E_heat_all[active]
-                base_factor         = Q_p * W[active] / V[i]
-                
-                for _ in range(20):  # 連立方程式なので反復回数を増やす
-                    # 数密度の計算
-                    HII_number_density      = self.hydrogen_number_density * HII_fraction_loc
-                    HI_number_density      = self.hydrogen_number_density * max(1.0 - HII_fraction_loc, 1e-15)
-                    HeIII_number_density     = self.helium_number_density * HeIII_fraction_loc
-                    HeII_number_density     = self.helium_number_density * HeII_fraction_loc
-                    HeI_number_density     = self.helium_number_density * HeI_fraction_loc
-                    electron_number_density = HII_number_density + HeII_number_density + 2.0 * HeIII_number_density
-                    
-                    # 全光学的厚み τ = κ × dr
-                    kappa = HI_number_density * HI_sigma + HeI_number_density * HeI_sigma + HeII_number_density * HeII_sigma
-                    tau_total = kappa * dr
-                    
-                    # φ(τ) = (1 - e^{-τ}) / τ: τ→0 で 1 に漸近
-                    # 解析的パスレングス・エスティメータの多種拡張
-                    phi = numpy.where(
-                        tau_total > 1e-8,
-                        (1.0 - numpy.exp(-tau_total)) / tau_total,
-                        1.0 - tau_total / 2.0)
-                    
-                    # 各種の光電離率（1原子あたり） [s⁻¹]
-                    common = base_factor * phi * dr
-                    Gamma_HI = numpy.sum(common * HI_sigma)
-                    Gamma_HeI = numpy.sum(common * HeI_sigma)
-                    Gamma_HeII = numpy.sum(common * HeII_sigma)
-                    
-                    # 加熱率（体積あたり） [erg s⁻¹ cm⁻³]
-                    # H_vol = Σ_s n_s × Σ_packets (common × σ_s × E_s)
-                    H_total_vol = (
-                        HI_number_density * numpy.sum(common * HI_sigma * HI_E_heat) +
-                        HeI_number_density * numpy.sum(common * HeI_sigma * HeI_E_heat) +
-                        HeII_number_density * numpy.sum(common * HeII_sigma * HeII_E_heat))
-                    
-                    if Gamma_HI + Gamma_HeI + Gamma_HeII <= 0:
-                        HII_fraction_new = 0.0
-                        HeII_fraction_new = 0.0
-                        HeIII_fraction_new = 0.0
-                        T_new = 10.0
+                x_loc = self._ion_fraction_vector(i)
+                T_loc = self.temperature_array[i]
+                dr = self.dr_cm[i]
+                base = Q_p * W * dr / V[i]    # [cm^-2 s^-1] (φ をかける前)
+                local_converged = False
+                last_local_it = 0
+
+                for local_it in range(max_local_iterations):
+                    last_local_it = local_it
+                    n_ion = self.ion_element_density * x_loc
+                    n_e = numpy.sum(self.ion_charge * n_ion)
+                    n_HI = n_ion[self.ion_symbols.index("H01")] if "H01" in self.ion_symbols else 0.0
+
+                    # 全光学的厚み τ = κ dr と φ(τ) = (1 - e^{-τ})/τ
+                    tau = (n_ion @ self.sigma_matrix) * dr
+                    phi = numpy.where(tau > 1e-8, -numpy.expm1(-numpy.minimum(tau, 700.0)) / numpy.maximum(tau, 1e-300), 1.0 - 0.5 * tau)
+                    c_E = base * phi                              # 局所の光子フラックス（ビンごと）[cm^-2 s^-1]
+
+                    # 光電離率 [s^-1] と加熱率 [erg s^-1 cm^-3]
+                    Gamma = self.sigma_matrix @ c_E
+                    heating_PI_ion = n_ion * (self.heating_matrix @ c_E)
+                    heating_PI = numpy.sum(heating_PI_ion)
+                    heating_compton = n_e * numpy.sum(self.compton_heating_weight * c_E)
+                    cooling_compton_per_kT = n_e * numpy.sum(self.compton_cooling_weight * c_E)   # × kT
+                    heating_total = heating_PI + heating_compton
+
+                    if heating_total <= 0.0:
+                        # 光子が届かないセル: 最低の電離段階・最低温度
+                        x_new = numpy.zeros(self.N_ions)
+                        for e, element in enumerate(self.elements):
+                            x_new[self.ion_offset[e]] = 1.0
+                        T_new = T_MIN
                     else:
-                        # --- 温度を熱収支方程式から求解 ---
+                        # --- 熱収支から温度を求める ---
+                        line_table = self.line_cooling.table(n_e, n_HI, x_loc)
+                        charge2 = self.ion_charge**2
+
+                        def cooling_terms(T):
+                            alpha_RR, alpha_DR, rr_cooling, dr_cooling, q_CI = self.rates_at(T)
+                            kT = k_B * T
+                            terms = {
+                                "line": numpy.sum(n_ion * self.line_cooling.rate(T, line_table)),
+                                "recombination_RR": numpy.sum(n_e * n_ion * rr_cooling),
+                                "recombination_DR": numpy.sum(n_e * n_ion * dr_cooling),
+                                "collisional_ionization": numpy.sum(n_e * n_ion * q_CI * self.ion_ip_erg),
+                                "bremsstrahlung": Lambda_ff_0 * g_ff(T) * numpy.sqrt(T) * n_e * numpy.sum(charge2 * n_ion),
+                                "compton": cooling_compton_per_kT * kT,
+                            }
+                            return terms
+
                         def thermal_balance_residual(T):
-                            aH = HI_alphaB(T)
-                            aHeI = HeI_alphaB(T)
-                            aHeII = HeII_alphaB(T)
-                            
-                            # 冷却項1: 再結合冷却（各イオン種 × n_e × α × kT）
-                            cool_recomb = (aH * electron_number_density * HII_number_density +
-                                           aHeI * electron_number_density * HeII_number_density +
-                                           aHeII * electron_number_density * HeIII_number_density) * k_B * T
-                            
-                            # 冷却項2: 制動放射冷却 (Z²=1 for H⁺,He⁺; Z²=4 for He²⁺)
-                            cool_ff = (Lambda_ff_0 * g_ff(T) * T**0.5 * electron_number_density *
-                                       (HII_number_density + HeII_number_density + 4.0 * HeIII_number_density))
-                            
-                            # 冷却項3: Ly-α 衝突励起冷却
-                            cool_lya = electron_number_density * HI_number_density * 7.3e-19 * numpy.exp(-118348.0 / T)
-                            
-                            return cool_recomb + cool_ff + cool_lya - H_total_vol
-                        
-                        try:
-                            T_new = scipy.optimize.brentq(thermal_balance_residual, 1.0, 1000000.0)
-                        except ValueError:
-                            if thermal_balance_residual(1.0) > 0:
-                                T_new = 1.0
-                            else:
-                                T_new = 1000000.0
-                        
-                        # --- 水素とヘリウムの電離平衡（汎用ソルバを使用） ---
-                        aH_new = HI_alphaB(T_new)
-                        x_H = self._solve_ionization_balance([Gamma_HI], [aH_new], electron_number_density)
-                        HI_fraction_new = x_H[0]
-                        HII_fraction_new = x_H[1]
-                        
-                        aHeI_new = HeI_alphaB(T_new)
-                        aHeII_new = HeII_alphaB(T_new)
-                        x_He = self._solve_ionization_balance(
-                            [Gamma_HeI, Gamma_HeII], 
-                            [aHeI_new, aHeII_new], 
-                            electron_number_density
-                        )
-                        HeI_fraction_new = x_He[0]
-                        HeII_fraction_new = x_He[1]
-                        HeIII_fraction_new = x_He[2]
-                    
+                            return sum(cooling_terms(T).values()) - heating_total
+
+                        if fixed_temperature is not None:
+                            T_new = float(fixed_temperature)
+                        else:
+                            try:
+                                T_new = scipy.optimize.brentq(thermal_balance_residual, T_MIN, T_MAX, xtol=1e-3, rtol=1e-6)
+                            except ValueError:
+                                T_new = T_MIN if thermal_balance_residual(T_MIN) > 0.0 else T_MAX
+
+                        # --- 電離平衡 ---
+                        x_new = self._solve_all_elements(Gamma, n_e, T_new)
+
                     # 収束判定
-                    if (abs(HII_fraction_new - HII_fraction_loc) < 1e-4 and
-                        abs(HeII_fraction_new - HeII_fraction_loc) < 1e-4 and
-                        abs(HeIII_fraction_new - HeIII_fraction_loc) < 1e-4 and
-                        abs(T_new - T_loc) < 1.0):
-                        HII_fraction_loc = HII_fraction_new
-                        HeII_fraction_loc = HeII_fraction_new
-                        HeIII_fraction_loc = HeIII_fraction_new
-                        HeI_fraction_loc = HeI_fraction_new
+                    if numpy.max(numpy.abs(x_new - x_loc)) < fraction_tolerance and abs(T_new - T_loc) < temperature_tolerance * T_loc:
+                        x_loc = x_new
                         T_loc = T_new
+                        local_converged = True
                         break
-                    
-                    # 局所的な振動（発散）を防ぐため、アンダーリラクゼーション（旧値と新値のブレンド）を適用
-                    weight = 0.5
-                    HII_fraction_loc = (1.0 - weight) * HII_fraction_loc + weight * HII_fraction_new
-                    HeII_fraction_loc = (1.0 - weight) * HeII_fraction_loc + weight * HeII_fraction_new
-                    HeIII_fraction_loc = (1.0 - weight) * HeIII_fraction_loc + weight * HeIII_fraction_new
-                    HeI_fraction_loc = (1.0 - weight) * HeI_fraction_loc + weight * HeI_fraction_new
-                    T_loc = (1.0 - weight) * T_loc + weight * T_new
-                
-                self.HII_fraction_array[i]      = HII_fraction_loc
-                self.HI_fraction_array[i]       = max(1.0 - HII_fraction_loc, 0.0)
-                self.HeII_fraction_array[i]     = HeII_fraction_loc
-                self.HeIII_fraction_array[i]    = HeIII_fraction_loc
-                self.HeI_fraction_array[i]      = HeI_fraction_loc
-                self.temperature_array[i]       = T_loc
-                
-                # 収束した状態でパケットの重みを全光学的厚みで減衰させる
-                n_HI_f = self.hydrogen_number_density * self.HI_fraction_array[i]
-                n_HeI_f = self.helium_number_density * self.HeI_fraction_array[i]
-                n_HeII_f = self.helium_number_density * self.HeII_fraction_array[i]
-                dtau_final = (n_HI_f * HI_sigma + n_HeI_f * HeI_sigma + n_HeII_f * HeII_sigma) * dr
-                W[active] *= numpy.exp(-dtau_final)
-                active = W > 1e-10
-            
-            max_diff_H = numpy.max(numpy.abs(self.HI_fraction_array - previous_HI_fraction))
-            max_diff_He = numpy.max(numpy.abs(self.HeII_fraction_array - previous_HeII_fraction))
-            max_diff = max(max_diff_H, max_diff_He)
-            time_iter = (time.time() - time_start_total) / 60.0
-            print(f"Iteration {global_it + 1:2d}/{max_global_iterations}: "
-                  f"max change H={max_diff_H:.2e} He={max_diff_He:.2e}  "
-                  f"(経過時間: {time_iter:.3e} min)")
-            
 
-        # 自己無撞着なストロームグレン半径の再計算
-        # HII領域（x > 0.5）内の体積で重み付けした平均温度を使用
-        ionized_mask = self.HII_fraction_array > 0.5
-        if numpy.any(ionized_mask):
-            volumes = 4 * numpy.pi * self.r_cm**2
-            T_mean_HII = numpy.average(self.temperature_array[ionized_mask], weights=volumes[ionized_mask])
-        else:
-            T_mean_HII = self.T_gas_init
-        integrand_Q = numpy.pi * self.B_nu_grid / (h * self.nu_grid)
-        Q_H0 = 4 * numpy.pi * self.R_star_cm**2 * numpy.trapezoid(integrand_Q, self.nu_grid)
-        n_e_fully_ionized = self.hydrogen_number_density * (1.0 + Y_He)
-        self.R_s_cm = (3 * Q_H0 / (4 * numpy.pi * self.hydrogen_number_density * n_e_fully_ionized * HI_alphaB(T_mean_HII)))**(1/3)
-        self.R_s_pc = self.R_s_cm / 3.086e18
-        print(f"自己無撞着なストロームグレン半径 R_s = {self.R_s_pc:.2f} pc ")
-        print(f"(HII領域平均温度 T = {T_mean_HII:.0f} K)")
+                    # アンダーリラクゼーション（振動を防ぐ）
+                    x_loc = (1.0 - relaxation) * x_loc + relaxation * x_new
+                    T_loc = numpy.exp((1.0 - relaxation) * numpy.log(T_loc) + relaxation * numpy.log(T_new))
 
+                if not local_converged:
+                    N_unconverged_cells += 1
 
+                # 収束した状態を保存
+                self._set_ion_fraction_vector(i, x_loc)
+                self.temperature_array[i] = T_loc
+                n_ion = self.ion_element_density * x_loc
+                n_e = numpy.sum(self.ion_charge * n_ion)
+                self.electron_density_array[i] = n_e
+                self.gamma_array[i] = Gamma
+                self._store_heating_cooling(i, T_loc, n_ion, n_e, heating_PI_ion, heating_compton, cooling_terms if heating_total > 0.0 else None)
+
+                # パケットの重みを全光学的厚みで減衰させる
+                tau_final = (n_ion @ self.sigma_matrix) * dr
+                W = W * numpy.exp(-numpy.minimum(tau_final, 700.0))
+
+                if i % progress_interval == 0 or i == self.N_r - 1:
+                    elapsed = time.time() - time_start_iter
+                    eta = elapsed / (i + 1) * (self.N_r - i - 1)
+                    print(f"    cell {i + 1:5d}/{self.N_r} r = {self.r_cm[i]:.4e} cm | T = {T_loc:.3e} K, n_e = {n_e:.3e} cm^-3, "
+                          f"{self._dominant_ions_string(i)} | local its = {last_local_it + 1:3d}, "
+                          f"remaining packets = {numpy.sum(W) / N_packets:.3f} | elapsed {elapsed / 60.0:.2f} min, ETA {eta / 60.0:.2f} min", flush=True)
+
+            max_diff = max(numpy.max(numpy.abs(f - p)) for f, p in zip(self.fraction_array, previous_fractions))
+            max_diff_T = numpy.max(numpy.abs(self.temperature_array - previous_T) / previous_T)
+            print(f"Iteration {global_it + 1:2d}/{max_global_iterations}: max change in fractions = {max_diff:.2e}, "
+                  f"in T = {max_diff_T:.2e}, cells hitting local iteration limit ({max_local_iterations}) = {N_unconverged_cells}  "
+                  f"(elapsed time: {(time.time() - time_start_total) / 60.0:.3e} min)", flush=True)
+
+    def _dominant_ions_string(self, i, elements=("H", "O", "Fe")):
+        parts = []
+        for e, element in enumerate(self.elements):
+            if element.element in elements:
+                j = int(numpy.argmax(self.fraction_array[e][i]))
+                parts.append(f"{element.element}:{element.ions[j].symbol}")
+        return " ".join(parts)
+
+    def _store_heating_cooling(self, i, T, n_ion, n_e, heating_PI_ion, heating_compton, cooling_terms):
+        """セル i の加熱・冷却の内訳 [erg s^-1 cm^-3] を元素ごとに保存する"""
+        if not self.heating_array:
+            for symbol in self.element_symbols:
+                self.heating_array[symbol] = numpy.zeros(self.N_r)
+                self.cooling_array[symbol] = numpy.zeros(self.N_r)
+            self.heating_array["compton"] = numpy.zeros(self.N_r)
+            for key in ("line", "recombination_RR", "recombination_DR", "collisional_ionization", "bremsstrahlung", "compton"):
+                self.cooling_array[key] = numpy.zeros(self.N_r)
+        for e, symbol in enumerate(self.element_symbols):
+            mask = self.ion_element_index == e
+            self.heating_array[symbol][i] = numpy.sum(heating_PI_ion[mask])
+        self.heating_array["compton"][i] = heating_compton
+        if cooling_terms is None:
+            return
+        terms = cooling_terms(T)
+        for key, value in terms.items():
+            self.cooling_array[key][i] = value
+        # 元素ごとの冷却（輝線 + 再結合 + 衝突電離）
+        alpha_RR, alpha_DR, rr_cooling, dr_cooling, q_CI = self.rates_at(T)
+        n_HI = n_ion[self.ion_symbols.index("H01")] if "H01" in self.ion_symbols else 0.0
+        line_table = self.line_cooling.table(n_e, n_HI, self._ion_fraction_vector(i))
+        per_ion = (n_ion * self.line_cooling.rate(T, line_table) + n_e * n_ion * rr_cooling +
+                   n_e * n_ion * dr_cooling + n_e * n_ion * q_CI * self.ion_ip_erg)
+        for e, symbol in enumerate(self.element_symbols):
+            self.cooling_array[symbol][i] = numpy.sum(per_ion[self.ion_element_index == e])
+
+    # ------------------------------------------------------------------
+    # 出力
+    # ------------------------------------------------------------------
     def save_tsv(self, filename="simulation.tsv"):
-        """計算結果をTSVファイルとして保存する"""
-        filepath    = os.path.join(DATA_DIR, filename)        
-        data        = numpy.column_stack((self.r_pc, self.HII_fraction_array, self.HI_fraction_array, self.HeIII_fraction_array, self.HeII_fraction_array, self.HeI_fraction_array, self.temperature_array))
-        header      = "Radius\tHII_fraction\tHI_fraction\tHeIII_fraction\tHeII_fraction\tHeI_fraction\tTemperature"
-        numpy.savetxt(filepath, data, delimiter="\t", header=header, comments="")
+        """
+        計算結果を TSV ファイルとして保存する。
+        列: Radius_cm, Temperature, n_e, 各イオンの割合（記号は <元素><電子数 2 桁>、裸のイオンは <元素>00）
+        """
+        os.makedirs(DATA_DIR, exist_ok=True)
+        filepath = os.path.join(DATA_DIR, filename)
+        columns = [self.r_cm, self.temperature_array, self.electron_density_array]
+        header = ["Radius_cm", "Temperature", "n_e"]
+        for e, element in enumerate(self.elements):
+            for j in range(element.Z + 1):
+                columns.append(self.fraction_array[e][:, j])
+                header.append(element.ions[j].symbol)
+        numpy.savetxt(filepath, numpy.column_stack(columns), delimiter="\t", header="\t".join(header), comments="")
+        return filepath
+
+    def save_heating_cooling_tsv(self, filename="heating_cooling.tsv"):
+        """加熱・冷却の内訳 [erg s^-1 cm^-3] を TSV ファイルとして保存する"""
+        os.makedirs(DATA_DIR, exist_ok=True)
+        filepath = os.path.join(DATA_DIR, filename)
+        columns = [self.r_cm, self.temperature_array]
+        header = ["Radius_cm", "Temperature"]
+        for key, value in self.heating_array.items():
+            columns.append(value)
+            header.append(f"heating_{key}")
+        columns.append(sum(self.heating_array.values()))
+        header.append("heating_total")
+        for key, value in self.cooling_array.items():
+            columns.append(value)
+            header.append(f"cooling_{key}")
+        columns.append(sum(self.cooling_array[k] for k in ("line", "recombination_RR", "recombination_DR", "collisional_ionization", "bremsstrahlung", "compton")))
+        header.append("cooling_total")
+        numpy.savetxt(filepath, numpy.column_stack(columns), delimiter="\t", header="\t".join(header), comments="")
+        return filepath

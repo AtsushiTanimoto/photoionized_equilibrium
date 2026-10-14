@@ -1,0 +1,68 @@
+"""
+XSTAR ベンチマーク (three_code_benchmark) と同じ設定で光電離平衡を計算するスクリプト
+  黒体 kT = 2.5 keV (T = 2.9011×10^7 K)、L(1-1000 Ry) = 10^44 erg/s、n_H = 10^9 cm^-3、
+  log ξ = 3.5 (r_in = 5.6234×10^15 cm)、N_H = 10^21 cm^-2 (厚さ 10^12 cm)、太陽組成 (angr)
+計算後、XSTAR の出力 (xout_abund1.csv, xout_abund1.fits) があれば compare_xstar.py で比較できる。
+"""
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "source"))  # source/ のモジュールを使う
+import argparse
+import numpy
+import time
+
+import equilibrium
+import source
+import visualization
+from constants import BENCHMARK_ELEMENTS, ABUNDANCES_ANGR
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--xstar-spectrum", default=None, help="XSTAR の xout_spect1.fits を光源に使う（省略時は黒体）")
+    parser.add_argument("--n-cells", type=int, default=2)
+    parser.add_argument("--n-packets", type=int, default=200000)
+    parser.add_argument("--n-energy", type=int, default=2000)
+    parser.add_argument("--iterations", type=int, default=3)
+    parser.add_argument("--elements", default=",".join(BENCHMARK_ELEMENTS))
+    parser.add_argument("--T-init", type=float, default=1.0e6)
+    parser.add_argument("--fix-temperature", type=float, default=None, help="熱収支を解かず、この温度 [K] で電離平衡だけを解く（収支の診断用）")
+    parser.add_argument("--xstar-dir", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "xstar"),
+                        help="XSTAR の実行ディレクトリ (xout_abund1.fits)。図に XSTAR のイオン割合を重ねる。\"\" で無効")
+    parser.add_argument("--output", default="benchmark", help="data/<output>.tsv, data/<output>_heating_cooling.tsv, figures/<output>_*.png")
+    args = parser.parse_args()
+
+    time_start = time.time()
+    luminosity = 1.000e+44             # erg/s (1-1000 Ry)
+    hydrogen_number_density = 1.000e+09   # cm^-3
+    log_xi = 3.5
+    column_density = 1.000e+21         # cm^-2
+    radius_inner = numpy.sqrt(luminosity / (hydrogen_number_density * 10**log_xi))
+    thickness = column_density / hydrogen_number_density
+    radius_edges = numpy.linspace(radius_inner, radius_inner + thickness, args.n_cells + 1)
+
+    if args.xstar_spectrum:
+        light_source = source.TabulatedSource.from_xstar(args.xstar_spectrum)
+    else:
+        light_source = source.BlackbodySource(T_BB=2.9011e+07, luminosity=luminosity)
+
+    model = equilibrium.PhotoionizationModel(
+        radius_edges=radius_edges, hydrogen_number_density=hydrogen_number_density, source=light_source,
+        elements=args.elements.split(","), abundances=ABUNDANCES_ANGR, T_gas=args.T_init, N_nu=args.n_energy)
+    model.setup_grids()
+    model.calculate_equilibrium(N_packets=args.n_packets, max_global_iterations=args.iterations, fixed_temperature=args.fix_temperature)
+    print("Saving results to TSV...", flush=True)
+    print(model.save_tsv(f"{args.output}.tsv"))
+    print(model.save_heating_cooling_tsv(f"{args.output}_heating_cooling.tsv"))
+    print("Plotting results...", flush=True)
+    xstar = None
+    if args.xstar_dir:
+        fits_path = os.path.join(args.xstar_dir, "xout_abund1.fits")
+        if os.path.exists(fits_path):
+            import compare_xstar
+            xstar, _, _ = compare_xstar.read_xstar_fractions(fits_path)
+        else:
+            print(f"XSTAR の出力が見つからないので XSTAR を重ねずに描きます: {fits_path}")
+    visualization.plot_ion_fractions(model, prefix=args.output, xstar=xstar)
+    print(f"Computation time: {(time.time() - time_start) / 60.0:.3e} min", flush=True)
