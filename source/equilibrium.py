@@ -429,6 +429,43 @@ class PhotoionizationModel:
         numpy.savetxt(filepath, numpy.column_stack(columns), delimiter="\t", header="\t".join(header), comments="")
         return filepath
 
+    def save_line_emission_tsv(self, filename="line_emission.tsv", minimum_fraction=1e-8, minimum_photons_per_ionization=1e-6):
+        """
+        衝突励起による輝線の放射率をセルごと・イオンごと・線ごとに TSV ファイルとして保存する。
+        列: cell, ion (<元素><電子数 2 桁>), chianti (CHIANTI のイオン名), upper, lower (CHIANTI の準位番号、1 始まり),
+            energy_eV, photons_per_s_per_cm3 (体積放射率), photons_per_photoionization
+        photons_per_photoionization = 放射率 / (Γ n_ion) は、MONACO が光電離イベントごとに輝線を抽選するときの
+        規格化（再結合 1 回あたりの光子数、.ln の衝突励起成分に相当）。平衡では再結合率 ≈ 光電離率 + 衝突電離率なので、
+        衝突電離が効く高温では「再結合 1 回あたり」より大きめになる。
+        占有率は各セルの T, n_e, n_HI で解き直す。割合 < minimum_fraction のイオンと、
+        光電離 1 回あたり < minimum_photons_per_ionization の線は書かない。
+        """
+        os.makedirs(DATA_DIR, exist_ok=True)
+        filepath = os.path.join(DATA_DIR, filename)
+        with open(filepath, "w") as f:
+            f.write("cell\tion\tchianti\tupper\tlower\tenergy_eV\tphotons_per_s_per_cm3\tphotons_per_photoionization\n")
+            for i in range(self.N_r):
+                x = self._ion_fraction_vector(i)
+                n_ion = self.ion_element_density * x
+                n_e = self.electron_density_array[i]
+                T = self.temperature_array[i]
+                n_HI = n_ion[self.ion_symbols.index("H01")] if "H01" in self.ion_symbols else 0.0
+                for k, (ion, model) in enumerate(zip(self.ions, self.line_cooling.ions)):
+                    if model is None or x[k] < minimum_fraction or n_ion[k] <= 0.0:
+                        continue
+                    ionization_rate = self.gamma_array[i, k] * n_ion[k]   # [s^-1 cm^-3]
+                    if ionization_rate <= 0.0:
+                        continue
+                    upper, lower, energy_eV, photons = model.line_emission(n_e, n_HI, T)
+                    emissivity = photons * n_ion[k]
+                    per_ionization = emissivity / ionization_rate
+                    order = numpy.argsort(energy_eV)
+                    for m in order:
+                        if per_ionization[m] < minimum_photons_per_ionization:
+                            continue
+                        f.write(f"{i}\t{ion.symbol}\t{ion.chianti_name}\t{upper[m]}\t{lower[m]}\t{energy_eV[m]:.6e}\t{emissivity[m]:.6e}\t{per_ionization[m]:.6e}\n")
+        return filepath
+
     def save_heating_cooling_tsv(self, filename="heating_cooling.tsv"):
         """加熱・冷却の内訳 [erg s^-1 cm^-3] を TSV ファイルとして保存する"""
         os.makedirs(DATA_DIR, exist_ok=True)

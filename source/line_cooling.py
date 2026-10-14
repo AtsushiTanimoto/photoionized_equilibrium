@@ -12,7 +12,7 @@ import numpy
 import os
 import scipy.interpolate
 
-from constants import h, c, k_B, CHIANTI_DIR
+from constants import h, c, k_B, eV, CHIANTI_DIR
 
 
 N_LEVELS_MAX = 20       # 各イオンで考慮する準位数の上限（低い方から）。60 準位との差は T ≤ 2×10⁴ K の C II-C IV で 0.1% 以下
@@ -145,6 +145,12 @@ class LineCoolingIon:
                 continue
             upper, lower = (i, j) if self.energy[i] > self.energy[j] else (j, i)
             self.A[upper, lower] += A
+        # 輝線の一覧 (上準位, 下準位, A [s^-1], エネルギー [erg]) — 放射率の出力に使う
+        upper_index, lower_index = numpy.nonzero(self.A)
+        self.line_upper = upper_index
+        self.line_lower = lower_index
+        self.line_A = self.A[upper_index, lower_index]
+        self.line_energy = self.energy[upper_index] - self.energy[lower_index]
         delta_E = numpy.maximum(self.energy[:, None] - self.energy[None, :], 0.0)
         # 各準位から自発放射で放出されるエネルギー Σ_j A_ij ΔE_ij [erg s^-1]
         self.radiated_power = numpy.sum(self.A * delta_E, axis=1)
@@ -171,6 +177,32 @@ class LineCoolingIon:
         boltzmann = numpy.exp(-(self.energy[upper] - self.energy[lower]) / (k_B * T_GRID))
         C_matrix[:, upper, lower] += q_down
         C_matrix[:, lower, upper] += q_down * self.g[upper] / self.g[lower] * boltzmann
+
+    def populations_at(self, n_e, n_HI, T_gas):
+        """温度 T_gas [K] での準位占有率（Σ = 1）。衝突係数は温度グリッドから log T で線形内挿する。"""
+        log_T = numpy.clip(numpy.log10(T_gas), LOG_T_GRID[0], LOG_T_GRID[-1])
+        k = min(max(int(numpy.searchsorted(LOG_T_GRID, log_T)), 1), len(LOG_T_GRID) - 1)
+        w = (log_T - LOG_T_GRID[k - 1]) / (LOG_T_GRID[k] - LOG_T_GRID[k - 1])
+        C_e = (1.0 - w) * self.C_e[k - 1] + w * self.C_e[k]
+        C_H = (1.0 - w) * self.C_H[k - 1] + w * self.C_H[k]
+        R = self.A + n_e * C_e + n_HI * C_H
+        R[1:, 0] += 1e-30
+        L = R.T.copy()
+        diagonal = numpy.arange(self.N_levels)
+        L[diagonal, diagonal] -= numpy.sum(R, axis=1)
+        L[0, :] = 1.0
+        b = numpy.zeros(self.N_levels)
+        b[0] = 1.0
+        return numpy.maximum(numpy.linalg.solve(L, b), 0.0)
+
+    def line_emission(self, n_e, n_HI, T_gas):
+        """
+        温度 T_gas での各輝線の光子放射率 [photons s^-1]（イオン 1 個あたり）
+        戻り値: (上準位 (1 始まり), 下準位 (1 始まり), エネルギー [eV], 光子放射率) の配列の組
+        """
+        populations = self.populations_at(n_e, n_HI, T_gas)
+        photons = populations[self.line_upper] * self.line_A
+        return self.line_upper + 1, self.line_lower + 1, self.line_energy / eV, photons
 
     def cooling_per_ion(self, n_e, n_HI):
         """

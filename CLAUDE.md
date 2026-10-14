@@ -24,7 +24,7 @@ kT = 2.5 keV の黒体、log ξ = 3.5、n = 10⁹ cm⁻³、N_H = 10²¹ cm⁻²
 ```sh
 cd benchmark
 python3 run_benchmark.py [--n-cells 1] [--n-packets 200000] [--iterations 2] [--elements H,He,O,Fe] [--fix-temperature 2.9e6] [--xstar-spectrum xstar/xout_spect1.fits] [--xstar-dir DIR]
-    # → data/benchmark.tsv, data/benchmark_heating_cooling.tsv, figures/benchmark_<元素>_fraction.png（既定で benchmark/xstar の XSTAR を重ねる。全元素・2 セルで約 30 秒）
+    # → data/benchmark.tsv, data/benchmark_heating_cooling.tsv, data/benchmark_line_emission.tsv, figures/benchmark_<元素>_fraction.png（既定で benchmark/xstar の XSTAR を重ねる。全元素・2 セルで約 30 秒）
 python3 compare_xstar.py [XSTAR_DIR]   # 既定で benchmark/xstar の xout_abund1.fits と温度・イオン割合・加熱冷却を比較
 cd ../source
 python3 run_simulation.py        # 従来の HII 領域モデル（黒体星 4×10⁴ K、H + He + C、Case B）→ figures/hii_region_*.png
@@ -47,6 +47,7 @@ python3 visualization.py --file ../data/benchmark.tsv [--radial]   # TSV から�
   - `calculate_equilibrium()`: 3 重のループ。(1) グローバル反復: パケットをビンにサンプリングし重み `W` を持たせる。(2) 半径セルを内側から外側へ: 連続吸収法で `W` が exp(−τ) 減衰。(3) セル内の局所反復（緩和係数 0.5）: パスレングス・エスティメータ φ(τ) = (1 − e^{−τ})/τ で局所の光子フラックス c_E を求め、光電離率 Γ と加熱率 → `brentq` で熱収支（輝線 + RR + DR + 衝突電離 + 制動放射 + Compton 冷却 = 光電離加熱 + Compton 加熱）→ `_solve_all_elements()` で電離平衡（上向き Γ + n_e q_CI、下向き n_e (α_RR + α_DR)、対数で連鎖）。散乱による光子の輸送は入れていない。
   - 状態は `fraction_array[e]`（形状 (N_r, Z+1)、列 j が電荷 j）、`temperature_array`、`electron_density_array`、加熱・冷却の内訳 `heating_array`/`cooling_array`（元素ごと + Compton/制動放射など）。
   - `save_tsv()` の列は Radius_cm, Temperature, n_e, 各イオン（記号は `<元素><電子数 2 桁>`、裸は `<元素>00`。XSTAR CSV/MONACO と同じ規約）。`save_heating_cooling_tsv()` は内訳。`data/` は自動作成される。
+  - `save_line_emission_tsv()`: 衝突励起による輝線をセルごと・イオンごと・線ごとに出力する（CHIANTI の準位番号、エネルギー、体積放射率 [photons s⁻¹ cm⁻³]、**光電離 1 回あたりの光子数** = 放射率/(Γ n_ion)）。後者は MONACO が光電離イベントごとに輝線を抽選する規格化で、MONACO の `.ln`（FAC の再結合カスケード、ce=0 で再生成する予定）の衝突励起成分に相当する。旧 `.ln` はイオン割合 1/(Z+1) を仮定して衝突励起を混ぜていたため光電離プラズマで過大だった。MONACO 側でセル（material）ごとの表を読む仕組みはまだない。
   - `recombination_case="B"` は H, He の再結合だけ `recombination.py` の Case B 近似式に置き換える（HII 領域向け）。
 - **`benchmark/compare_xstar.py`**: XSTAR の `xout_abund1.fits`（ABUNDANCES の最終行。裸のイオンの列はなく 1 − Σ で求める。温度は 10⁴ K 単位、HEATING/COOLING は erg s⁻¹ cm⁻³）と比較する。**XSTAR の元素ごとの heating/cooling は共鳴線による連続光の散乱（吸収を加熱、再放射を冷却に計上）を含むため、元素ごとの値は本コードの光電離加熱・輝線冷却と直接は比べられず、差し引き（net）で比べる。**
 
