@@ -13,7 +13,7 @@ import numpy
 import astropy.io.fits
 
 import visualization
-from constants import ELEMENT_SYMBOLS, ATOMIC_NUMBER
+import constants
 
 ROMAN = visualization.ROMAN
 ELEMENT_NAMES = {"H": "hydrogen", "He": "helium", "Li": "lithium", "Be": "beryllium", "B": "boron", "C": "carbon",
@@ -30,8 +30,8 @@ def read_xstar_fractions(fits_path, row=-1):
     """
     data = astropy.io.fits.open(fits_path)["ABUNDANCES"].data
     fractions = {}
-    for symbol in ELEMENT_SYMBOLS:
-        Z = ATOMIC_NUMBER[symbol]
+    for symbol in constants.ELEMENT_SYMBOLS:
+        Z = constants.ATOMIC_NUMBER[symbol]
         fraction = numpy.zeros(Z + 1)
         for charge in range(Z):
             name = f"{symbol.lower()}_{ROMAN[charge].lower()}"
@@ -50,14 +50,23 @@ def read_xstar_heating_cooling(fits_path, row=-1):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("xstar_dir", nargs="?", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "xstar"),
-                        help="XSTAR の実行ディレクトリ（既定: benchmark/xstar）")
-    parser.add_argument("--tsv", default=os.path.join(visualization.DATA_DIR, "benchmark.tsv"))
-    parser.add_argument("--heating", default=os.path.join(visualization.DATA_DIR, "benchmark_heating_cooling.tsv"))
+    parser.add_argument("--log-xi", type=float, default=3.5, help="比較する log ξ（xstar/logxi=<値>/ と data/benchmark_logxi=<値>*.tsv を使う）")
+    parser.add_argument("--xstar-dir", default=None, help="XSTAR の実行ディレクトリ（既定: xstar/logxi=<値>）")
+    parser.add_argument("--tsv", default=None)
+    parser.add_argument("--heating", default=None)
     parser.add_argument("--row", type=int, default=-1, help="XSTAR の行")
     parser.add_argument("--cell", type=int, default=-1, help="本コードのセル")
-    parser.add_argument("--prefix", default="benchmark")
+    parser.add_argument("--prefix", default=None)
     args = parser.parse_args()
+    name = f"benchmark_logxi={args.log_xi:.3e}"
+    if args.xstar_dir is None:
+        args.xstar_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "xstar", f"logxi={args.log_xi:.3e}")
+    if args.tsv is None:
+        args.tsv = os.path.join(visualization.DATA_DIR, f"{name}.tsv")
+    if args.heating is None:
+        args.heating = os.path.join(visualization.DATA_DIR, f"{name}_heating_cooling.tsv")
+    if args.prefix is None:
+        args.prefix = name
 
     fits_path = os.path.join(args.xstar_dir, "xout_abund1.fits")
     xstar, T_xstar, n_e_xstar = read_xstar_fractions(fits_path, args.row)
@@ -68,8 +77,8 @@ if __name__ == "__main__":
     print(f"n_e:         XSTAR = {n_e_xstar:.4e},   this code = {table['n_e'][cell]:.4e} cm^-3")
     print()
     print("ion fractions (stages with fraction > 1e-4 in either code)")
-    for symbol in sorted(ours.keys(), key=lambda s: ATOMIC_NUMBER[s]):
-        Z = ATOMIC_NUMBER[symbol]
+    for symbol in sorted(ours.keys(), key=lambda s: constants.ATOMIC_NUMBER[s]):
+        Z = constants.ATOMIC_NUMBER[symbol]
         lines = []
         for j in range(Z + 1):
             a, b = ours[symbol][cell, j], xstar[symbol][j]
@@ -84,12 +93,12 @@ if __name__ == "__main__":
         hc = visualization.read_tsv(args.heating)
         print()
         print("heating [erg s^-1 cm^-3]           this code      XSTAR")
-        for symbol in sorted(ours.keys(), key=lambda s: ATOMIC_NUMBER[s]):
+        for symbol in sorted(ours.keys(), key=lambda s: constants.ATOMIC_NUMBER[s]):
             print(f"  {symbol:8s} {hc['heating_' + symbol][cell]:12.3e} {heating_xstar.get(ELEMENT_NAMES[symbol], numpy.nan):12.3e}")
         print(f"  {'compton':8s} {hc['heating_compton'][cell]:12.3e} {heating_xstar['compton']:12.3e}")
         print(f"  {'total':8s} {hc['heating_total'][cell]:12.3e} {heating_xstar['total']:12.3e}")
         print("cooling [erg s^-1 cm^-3]           this code      XSTAR")
-        for symbol in sorted(ours.keys(), key=lambda s: ATOMIC_NUMBER[s]):
+        for symbol in sorted(ours.keys(), key=lambda s: constants.ATOMIC_NUMBER[s]):
             print(f"  {symbol:8s} {hc['cooling_' + symbol][cell]:12.3e} {cooling_xstar.get(ELEMENT_NAMES[symbol], numpy.nan):12.3e}")
         for key in ("line", "recombination_RR", "recombination_DR", "collisional_ionization"):
             print(f"  {key:24s} {hc['cooling_' + key][cell]:12.3e}")

@@ -16,7 +16,7 @@ import numpy
 import os
 import scipy.interpolate
 
-from constants import h, k_B, eV, m_e, ATOMIC_DATA_DIR, CHIANTI_DIR, ATOMIC_NUMBER
+import constants
 
 
 CM_INVERSE_TO_EV = 1.239841984e-4  # 1 cm^-1 = 1.2398e-4 eV
@@ -44,7 +44,7 @@ def read_chianti_numeric_lines(filepath):
 
 def _chianti_ion_directory(element, ion):
     name = f"{element.lower()}_{ion}"
-    return os.path.join(CHIANTI_DIR, element.lower(), name), name
+    return os.path.join(constants.CHIANTI_DIR, element.lower(), name), name
 
 
 _ionization_potentials = None
@@ -57,7 +57,7 @@ def ionization_potential(Z, charge):
     global _ionization_potentials
     if _ionization_potentials is None:
         _ionization_potentials = {}
-        with open(os.path.join(CHIANTI_DIR, "ip", "chianti.ip")) as f:
+        with open(os.path.join(constants.CHIANTI_DIR, "ip", "chianti.ip")) as f:
             for line in f:
                 columns = line.split()
                 if len(columns) < 3 or line.strip() == "-1":
@@ -140,7 +140,7 @@ def radiative_recombination_energy_factor(T_gas, charge):
     lam = 2.0 * z**2 * T_HI / T_gas
     alpha = 1.269e-13 * lam**1.503 / (1.0 + (lam / 0.522)**0.47)**1.923
     beta = 1.778e-29 * (T_gas / z**2) * lam**1.965 / (1.0 + (lam / 0.541)**0.502)**2.697
-    return beta / (alpha * k_B * T_gas / z**2)
+    return beta / (alpha * constants.k_B * T_gas / z**2)
 
 
 def dielectronic_recombination_rate(T_gas, dr_energies, dr_coefficients):
@@ -158,7 +158,7 @@ def dielectronic_recombination_cooling(T_gas, dr_energies, dr_coefficients):
     各項の共鳴エネルギー k_B E_i を捕獲される電子が持ち去るとみなす: Λ_DR/(n_e n) = T^(-3/2) Σ_i c_i k_B E_i exp(-E_i/T)
     """
     T_gas = numpy.asarray(T_gas, dtype=float)[..., None]
-    return numpy.sum(dr_coefficients * k_B * dr_energies * numpy.exp(-dr_energies / T_gas), axis=-1) * numpy.squeeze(T_gas, axis=-1)**-1.5
+    return numpy.sum(dr_coefficients * constants.k_B * dr_energies * numpy.exp(-dr_energies / T_gas), axis=-1) * numpy.squeeze(T_gas, axis=-1)**-1.5
 
 
 def load_chianti_direct_ionization(element, charge):
@@ -218,8 +218,8 @@ def direct_ionization_rate(T_gas, shells, N_u=400):
     u = numpy.geomspace(1.0, 1.0e4, N_u)
     E = I_min * u                                       # [eV]
     sigma = direct_ionization_cross_section(E, shells)  # [cm^2]
-    v = numpy.sqrt(2.0 * E * eV / m_e)                  # [cm s^-1]
-    kT = k_B * T_gas[..., None] / eV                     # [eV]
+    v = numpy.sqrt(2.0 * E * constants.eV / constants.m_e)                  # [cm s^-1]
+    kT = constants.k_B * T_gas[..., None] / constants.eV                     # [eV]
     f_E = 2.0 * numpy.sqrt(E / numpy.pi) * kT**-1.5 * numpy.exp(-numpy.minimum(E / kT, 700.0))  # [eV^-1]
     return numpy.trapezoid(sigma * v * f_E, E, axis=-1)
 
@@ -244,7 +244,7 @@ def load_photoionization_channels(element, number_of_electrons, ionization_poten
     （チャネル間の閾値の差は FAC の値を保つ）。
     戻り値: [(I [eV], Σ0 [cm^2], Γ, τ [eV]), ...] (電離ポテンシャルの昇順)。ファイルがなければ None。
     """
-    filepath = os.path.join(ATOMIC_DATA_DIR, element, f"{fac_ion_symbol(element, number_of_electrons)}.pi")
+    filepath = os.path.join(constants.ATOMIC_DATA_DIR, element, f"{fac_ion_symbol(element, number_of_electrons)}.pi")
     if not os.path.exists(filepath):
         return None
     channels = []
@@ -281,7 +281,7 @@ def photoionization_heating_cross_section(E_eV, channels):
     E = numpy.asarray(E_eV, dtype=float)
     heating = numpy.zeros_like(E)
     for I, Sigma0, Gamma, tau in channels:
-        heating += numpy.where(E < I, 0.0, Sigma0 * (E / I)**Gamma * numpy.exp(-E / tau) * (E - I) * eV)
+        heating += numpy.where(E < I, 0.0, Sigma0 * (E / I)**Gamma * numpy.exp(-E / tau) * (E - I) * constants.eV)
     return heating
 
 
@@ -298,7 +298,7 @@ class IonData:
     """
     def __init__(self, element, charge):
         self.element = element
-        self.Z = ATOMIC_NUMBER[element]
+        self.Z = constants.ATOMIC_NUMBER[element]
         self.charge = charge
         self.number_of_electrons = self.Z - charge
         self.symbol = fac_ion_symbol(element, self.number_of_electrons)  # 例: Fe24, 裸は Fe00
@@ -343,7 +343,7 @@ class IonData:
         T_gas = numpy.asarray(T_gas, dtype=float)
         if self.rr_type is None:
             return numpy.zeros_like(T_gas)
-        return self.alpha_RR(T_gas) * k_B * T_gas * radiative_recombination_energy_factor(T_gas, self.charge)
+        return self.alpha_RR(T_gas) * constants.k_B * T_gas * radiative_recombination_energy_factor(T_gas, self.charge)
 
     def alpha_DR(self, T_gas):
         """二電子再結合係数 (このイオン → 1 階下) [cm^3 s^-1]"""
@@ -370,7 +370,7 @@ class ElementData:
     """
     def __init__(self, element):
         self.element = element
-        self.Z = ATOMIC_NUMBER[element]
+        self.Z = constants.ATOMIC_NUMBER[element]
         self.ions = [IonData(element, charge) for charge in range(self.Z + 1)]
         charges_with_data = [ion.charge for ion in self.ions if ion.has_photoionization_data]
         if not charges_with_data:

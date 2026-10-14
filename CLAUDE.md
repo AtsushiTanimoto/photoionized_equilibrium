@@ -27,7 +27,7 @@ python3 run_benchmark.py [--n-cells 1] [--n-packets 200000] [--iterations 2] [--
     # → data/benchmark.tsv, data/benchmark_heating_cooling.tsv, data/benchmark_line_emission.tsv, figures/benchmark_<元素>_fraction.png（既定で benchmark/xstar の XSTAR を重ねる。全元素・2 セルで約 30 秒）
 python3 compare_xstar.py [XSTAR_DIR]   # 既定で benchmark/xstar の xout_abund1.fits と温度・イオン割合・加熱冷却を比較
 cd ../source
-python3 run_simulation.py        # 従来の HII 領域モデル（黒体星 4×10⁴ K、H + He + C、Case B）→ figures/hii_region_*.png
+python3 run_simulation.py        # 従来の HII 領域モデル（黒体星 4×10⁴ K、H + He + C + N、Case B）→ figures/hii_region_*.png
 python3 visualization.py --file ../data/benchmark.tsv [--radial]   # TSV から図だけを再描画
 ```
 
@@ -56,6 +56,8 @@ python3 visualization.py --file ../data/benchmark.tsv [--radial]   # TSV から�
 1 セル・2×10⁵ パケットで、イオン割合は XSTAR と主要な段階で 10〜20% 以内（Fe XXIII〜XXVII は 5% 以内、Cr/Mn/Ni の低い段階は約 2 倍）。温度は本コード 3.9×10⁶ K、XSTAR 2.9×10⁶ K。XSTAR の温度で収支を評価すると本コードは加熱 1.17×10⁻⁵ > 冷却 0.95×10⁻⁵ erg s⁻¹ cm⁻³。主な差: XSTAR の O VIII Lyα 衝突強度が過大（約 19 倍、XSTAR チームに報告済み）で XSTAR の O 冷却が約 2.6×10⁻⁶ 過大、本コードの制動放射が XSTAR より約 20% 大きい（Gaunt 因子 1.35 vs 約 1.1）、Fe/O の光電離加熱が本コードでやや大きい。未実装: Auger 電離（内殻光電離後の多重電離）、励起自動電離、電荷交換、散乱の輸送、ダスト。
 
 ## 実装上の注意
+
+- `from module import name` は使わず、`import module` して `module.name` で参照する（ユーザの方針）。
 
 - 新しい冷却・加熱過程を加えるときは、`calculate_equilibrium()` 内の `cooling_terms()` と `_store_heating_cooling()`、`save_heating_cooling_tsv()`、`compare_xstar.py` の表示をすべて揃える。
 - 温度に依存する係数は `_setup_rate_tables()` で温度表にして `rates_at(T)` で内挿している（`brentq` の中で毎回 CHIANTI の式を評価しないため）。新しい係数も同じ仕組みに載せる。

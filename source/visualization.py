@@ -8,7 +8,7 @@ import numpy
 import os
 import seaborn
 
-from constants import ATOMIC_NUMBER
+import constants
 
 # figureディレクトリのパス（プロジェクトルート直下）
 FIGURE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "figures")
@@ -32,8 +32,8 @@ def _fractions_by_element(table):
     result = {}
     for key, values in table.items():
         symbol = key.rstrip("0123456789")
-        if symbol in ATOMIC_NUMBER and key[len(symbol):].isdigit():
-            Z = ATOMIC_NUMBER[symbol]
+        if symbol in constants.ATOMIC_NUMBER and key[len(symbol):].isdigit():
+            Z = constants.ATOMIC_NUMBER[symbol]
             charge = Z - int(key[len(symbol):])
             if symbol not in result:
                 result[symbol] = numpy.zeros((len(values), Z + 1))
@@ -59,7 +59,7 @@ def plot_ion_fractions(model=None, prefix="simulation", table=None, radius=None,
         fractions = _fractions_by_element(table)
 
     seaborn.set_palette("hls", 2)
-    for symbol in sorted(fractions.keys(), key=lambda s: ATOMIC_NUMBER[s]):
+    for symbol in sorted(fractions.keys(), key=lambda s: constants.ATOMIC_NUMBER[s]):
         fraction = fractions[symbol][cell]
         Z = len(fraction) - 1
         stages = numpy.arange(Z + 1)
@@ -108,7 +108,7 @@ def plot_radial_profiles(model=None, prefix="simulation", table=None, radius=Non
     else:
         fractions = _fractions_by_element(table)
     r_pc = radius / 3.0856775814913673e18
-    symbols = elements if elements is not None else sorted(fractions.keys(), key=lambda s: ATOMIC_NUMBER[s])
+    symbols = elements if elements is not None else sorted(fractions.keys(), key=lambda s: constants.ATOMIC_NUMBER[s])
     for symbol in symbols:
         fraction = fractions[symbol]
         Z = fraction.shape[1] - 1

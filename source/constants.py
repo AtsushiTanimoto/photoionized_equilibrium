@@ -44,3 +44,4 @@ BENCHMARK_ELEMENTS = ["H", "He", "C", "N", "O", "Ne", "Mg", "Si", "S", "Ar", "Ca
 # --- 従来の HII 領域モデル (H + He + C) の存在比 ---
 Y_He        = 0.1            # ヘリウム存在比 (n_He / n_H)
 A_C         = 10**(8.46 - 12.0)  # 炭素存在比 (n_C / n_H): 太陽組成 Asplund et al. (2021)
+A_N         = 10**(7.83 - 12.0)  # 窒素存在比 (n_N / n_H): 太陽組成 Asplund et al. (2021)

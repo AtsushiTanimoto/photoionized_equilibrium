@@ -1,5 +1,5 @@
 """
-HII 領域モデル（黒体星に照らされた一様密度ガス球、H + He + C）の光電離平衡計算のメインスクリプト
+HII 領域モデル（黒体星に照らされた一様密度ガス球、H + He + C + N）の光電離平衡計算のメインスクリプト
 """
 import numpy
 import time
@@ -7,19 +7,19 @@ import time
 import equilibrium
 import source
 import visualization
-from constants import pc, R_sun, Y_He, A_C
+import constants
 
 
 if __name__ == "__main__":
     time_start = time.time()
-    radius_edges            = numpy.linspace(0.0, 1.0, 101) * pc      # セル境界 [cm]
-    radius_edges[0]         = 1.0e-3 * pc                             # 中心は特異点なので小さくずらす
+    radius_edges            = numpy.linspace(0.0, 1.0, 101) * constants.pc      # セル境界 [cm]
+    radius_edges[0]         = 1.0e-3 * constants.pc                             # 中心は特異点なので小さくずらす
     hydrogen_number_density = 1.000e+04                               # [cm^-3]
-    light_source            = source.BlackbodySource(T_BB=4.0e4, radius_cm=10.0 * R_sun)  # O 型星
+    light_source            = source.BlackbodySource(T_BB=4.0e4, radius_cm=10.0 * constants.R_sun)  # O 型星
 
     model = equilibrium.PhotoionizationModel(
         radius_edges=radius_edges, hydrogen_number_density=hydrogen_number_density, source=light_source,
-        elements=["H", "He", "C"], abundances={"H": 1.0, "He": Y_He, "C": A_C},
+        elements=["H", "He", "C", "N"], abundances={"H": 1.0, "He": constants.Y_He, "C": constants.A_C, "N": constants.A_N},
         T_gas=1e4,                  # ガスの初期温度 [K]
         N_nu=1001,                  # エネルギービン数
         recombination_case="B")     # H, He は Case B

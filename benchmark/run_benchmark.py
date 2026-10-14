@@ -15,7 +15,7 @@ import time
 import equilibrium
 import source
 import visualization
-from constants import BENCHMARK_ELEMENTS, ABUNDANCES_ANGR
+import constants
 
 
 if __name__ == "__main__":
@@ -25,18 +25,23 @@ if __name__ == "__main__":
     parser.add_argument("--n-packets", type=int, default=200000)
     parser.add_argument("--n-energy", type=int, default=2000)
     parser.add_argument("--iterations", type=int, default=3)
-    parser.add_argument("--elements", default=",".join(BENCHMARK_ELEMENTS))
+    parser.add_argument("--elements", default=",".join(constants.BENCHMARK_ELEMENTS))
     parser.add_argument("--T-init", type=float, default=1.0e6)
     parser.add_argument("--fix-temperature", type=float, default=None, help="熱収支を解かず、この温度 [K] で電離平衡だけを解く（収支の診断用）")
-    parser.add_argument("--xstar-dir", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "xstar"),
-                        help="XSTAR の実行ディレクトリ (xout_abund1.fits)。図に XSTAR のイオン割合を重ねる。\"\" で無効")
-    parser.add_argument("--output", default="benchmark", help="data/<output>.tsv, data/<output>_heating_cooling.tsv, figures/<output>_*.png")
+    parser.add_argument("--log-xi", type=float, default=3.5, help="電離パラメータ log ξ (内径 r_in = √(L/(n ξ)) で指定する)")
+    parser.add_argument("--xstar-dir", default=None,
+                        help="XSTAR の実行ディレクトリ (xout_abund1.fits)。図に XSTAR のイオン割合を重ねる。既定は xstar/logxi=<値>、\"\" で無効")
+    parser.add_argument("--output", default=None, help="data/<output>.tsv などの名前。既定は benchmark_logxi=<値>")
     args = parser.parse_args()
 
     time_start = time.time()
     luminosity = 1.000e+44             # erg/s (1-1000 Ry)
     hydrogen_number_density = 1.000e+09   # cm^-3
-    log_xi = 3.5
+    log_xi = args.log_xi
+    if args.output is None:
+        args.output = f"benchmark_logxi={log_xi:.3e}"
+    if args.xstar_dir is None:
+        args.xstar_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "xstar", f"logxi={log_xi:.3e}")
     column_density = 1.000e+21         # cm^-2
     radius_inner = numpy.sqrt(luminosity / (hydrogen_number_density * 10**log_xi))
     thickness = column_density / hydrogen_number_density
@@ -49,7 +54,7 @@ if __name__ == "__main__":
 
     model = equilibrium.PhotoionizationModel(
         radius_edges=radius_edges, hydrogen_number_density=hydrogen_number_density, source=light_source,
-        elements=args.elements.split(","), abundances=ABUNDANCES_ANGR, T_gas=args.T_init, N_nu=args.n_energy)
+        elements=args.elements.split(","), abundances=constants.ABUNDANCES_ANGR, T_gas=args.T_init, N_nu=args.n_energy)
     model.setup_grids()
     model.calculate_equilibrium(N_packets=args.n_packets, max_global_iterations=args.iterations, fixed_temperature=args.fix_temperature)
     print("Saving results to TSV...", flush=True)

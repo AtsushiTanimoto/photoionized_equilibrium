@@ -12,7 +12,7 @@ import numpy
 import os
 import scipy.interpolate
 
-from constants import h, c, k_B, eV, CHIANTI_DIR
+import constants
 
 
 N_LEVELS_MAX = 20       # 各イオンで考慮する準位数の上限（低い方から）。60 準位との差は T ≤ 2×10⁴ K の C II-C IV で 0.1% 以下
@@ -82,7 +82,7 @@ def effective_collision_strength(T_gas, delta_E_Ry, transition_type, C, x_knots,
     Burgess & Tully (1992) のスケーリングを戻して有効衝突強度 Υ(T) を求める（CHIANTI の規約）
     スケールした衝突強度は 3 次スプラインで内挿する。
     """
-    kT_over_dE = k_B * T_gas / (delta_E_Ry * Ry)
+    kT_over_dE = constants.k_B * T_gas / (delta_E_Ry * Ry)
     if transition_type in (1, 4):
         x = 1.0 - numpy.log(C) / numpy.log(kT_over_dE + C)
     else:
@@ -116,7 +116,7 @@ H_DEEXCITATION_RATE = {
 
 def chianti_ion_directory(name):
     """CHIANTI のイオン名 (例: "fe_25") からディレクトリを返す"""
-    return os.path.join(CHIANTI_DIR, name.split("_")[0], name)
+    return os.path.join(constants.CHIANTI_DIR, name.split("_")[0], name)
 
 
 def line_cooling_data_available(name):
@@ -134,7 +134,7 @@ class LineCoolingIon:
         N = min(N_levels_max, len(levels))
         self.N_levels = N
         self.g = numpy.array([levels[i + 1][0] for i in range(N)])
-        self.energy = numpy.array([levels[i + 1][1] for i in range(N)]) * h * c  # [erg]
+        self.energy = numpy.array([levels[i + 1][1] for i in range(N)]) * constants.h * constants.c  # [erg]
         T = T_GRID[:, None]
 
         # 自発放射: A[i, j] は準位 i → j の遷移確率（エネルギーの高い方から低い方へ）
@@ -174,7 +174,7 @@ class LineCoolingIon:
 
     def _add_collision_pair(self, C_matrix, lower, upper, q_down):
         """脱励起係数 q_down(T) と詳細つり合いから得られる励起係数を衝突行列に加える"""
-        boltzmann = numpy.exp(-(self.energy[upper] - self.energy[lower]) / (k_B * T_GRID))
+        boltzmann = numpy.exp(-(self.energy[upper] - self.energy[lower]) / (constants.k_B * T_GRID))
         C_matrix[:, upper, lower] += q_down
         C_matrix[:, lower, upper] += q_down * self.g[upper] / self.g[lower] * boltzmann
 
@@ -202,7 +202,7 @@ class LineCoolingIon:
         """
         populations = self.populations_at(n_e, n_HI, T_gas)
         photons = populations[self.line_upper] * self.line_A
-        return self.line_upper + 1, self.line_lower + 1, self.line_energy / eV, photons
+        return self.line_upper + 1, self.line_lower + 1, self.line_energy / constants.eV, photons
 
     def cooling_per_ion(self, n_e, n_HI):
         """

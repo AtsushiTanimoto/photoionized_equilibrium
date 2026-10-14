@@ -12,11 +12,11 @@ import os
 import scipy.optimize
 import time
 
-from constants import k_B, eV, sigma_T, m_e_c2_eV, Lambda_ff_0, ABUNDANCES_ANGR, BENCHMARK_ELEMENTS
-from atomic_data import get_element, radiative_recombination_energy_factor
-from bremsstrahlung import g_ff
-from line_cooling import LineCoolingSet
-from recombination import HI_alphaB, HeI_alphaB, HeII_alphaB
+import constants
+import atomic_data
+import bremsstrahlung
+import line_cooling
+import recombination
 
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
@@ -43,20 +43,20 @@ def _log10_table(values):
 class PhotoionizationModel:
     """光電離平衡を計算するクラス（任意の元素の組）"""
     def __init__(self, radius_edges, hydrogen_number_density, source,
-                 elements=BENCHMARK_ELEMENTS, abundances=ABUNDANCES_ANGR,
+                 elements=constants.BENCHMARK_ELEMENTS, abundances=constants.ABUNDANCES_ANGR,
                  T_gas=1e4, N_nu=2000, E_min_eV=None, E_max_eV=None,
                  recombination_case="A", N_levels_max=None):
         """
         radius_edges:            半径セルの境界 [cm]（長さ N_r + 1、昇順）
         hydrogen_number_density: 全水素数密度 [cm^-3]（一様）
-        source:                  光源 (source.Source)
+        source:                  光源 (Source)
         elements:                扱う元素記号のリスト
         abundances:              H に対する数密度比の辞書
         T_gas:                   温度の初期値 [K]
         N_nu:                    エネルギービンの数
         E_min_eV, E_max_eV:      エネルギービンの範囲 [eV]（省略時は最低の電離閾値から光源の上限まで）
         recombination_case:      "A" (CHIANTI の RR+DR) または "B" (H, He のみ Case B の近似式に置き換える; HII 領域向け)
-        N_levels_max:            輝線冷却で考慮する準位数（省略時は line_cooling.N_LEVELS_MAX）
+        N_levels_max:            輝線冷却で考慮する準位数（省略時は N_LEVELS_MAX）
         """
         self.radius_edges = numpy.asarray(radius_edges, dtype=float)
         self.N_r = len(self.radius_edges) - 1
@@ -75,7 +75,7 @@ class PhotoionizationModel:
         self.N_levels_max = N_levels_max
 
         # 原子データ
-        self.elements = [get_element(symbol) for symbol in self.element_symbols]
+        self.elements = [atomic_data.get_element(symbol) for symbol in self.element_symbols]
         # 全イオンの一覧（元素ごとに電荷 min_charge, ..., Z）
         self.ion_element_index = []   # イオン → 元素のインデックス
         self.ion_charge = []          # イオン → 電荷
@@ -90,7 +90,7 @@ class PhotoionizationModel:
         self.N_ions = len(self.ion_charge)
         self.ions = [self.elements[e].ions[int(j)] for e, j in zip(self.ion_element_index, self.ion_charge)]
         self.ion_symbols = [ion.symbol for ion in self.ions]
-        self.ion_ip_erg = numpy.array([ion.ip_eV * eV if ion.ip_eV is not None else 0.0 for ion in self.ions])
+        self.ion_ip_erg = numpy.array([ion.ip_eV * constants.eV if ion.ip_eV is not None else 0.0 for ion in self.ions])
         self.element_number_density = numpy.array([hydrogen_number_density * self.abundances[s] for s in self.element_symbols])
         self.ion_element_density = self.element_number_density[self.ion_element_index]
 
@@ -119,16 +119,16 @@ class PhotoionizationModel:
         E_max = self.E_max_eV if self.E_max_eV is not None else self.source.E_max_eV
         self.E_edges = numpy.geomspace(E_min, E_max, self.N_nu + 1)
         self.E_eV = numpy.sqrt(self.E_edges[1:] * self.E_edges[:-1])   # ビンの代表エネルギー（幾何平均）
-        self.E_erg = self.E_eV * eV
+        self.E_erg = self.E_eV * constants.eV
 
         # 光電離断面積 σ [cm^2] と加熱断面積 Σ σ_k (E - I_k) [erg cm^2] の行列 (N_ions, N_nu)
         self.sigma_matrix = numpy.array([ion.photoionization_cross_section(self.E_eV) for ion in self.ions])
         self.heating_matrix = numpy.array([ion.photoionization_heating_cross_section(self.E_eV) for ion in self.ions])
 
         # Compton 散乱: 1 回の散乱で電子が得る平均エネルギー E^2/(m_e c^2) (1 - 21E/(5 m_e c^2)) と失うエネルギー 4kT E/(m_e c^2)
-        x = self.E_eV / m_e_c2_eV
-        self.compton_heating_weight = sigma_T * self.E_erg * x * numpy.maximum(1.0 - 21.0 / 5.0 * x, 0.0)  # [erg cm^2]
-        self.compton_cooling_weight = sigma_T * 4.0 * x                                                      # [cm^2]（× kT）
+        x = self.E_eV / constants.m_e_c2_eV
+        self.compton_heating_weight = constants.sigma_T * self.E_erg * x * numpy.maximum(1.0 - 21.0 / 5.0 * x, 0.0)  # [erg cm^2]
+        self.compton_cooling_weight = constants.sigma_T * 4.0 * x                                                      # [cm^2]（× kT）
 
         # 光源: ビンごとの光子放出率 [s^-1]
         self.Q_bin = self.source.photon_rate_per_bin(self.E_edges)
@@ -140,7 +140,7 @@ class PhotoionizationModel:
         # 輝線冷却（CHIANTI のデータがあるイオンのみ）
         names = [ion.chianti_name if ion.charge < ion.Z else "none" for ion in self.ions]
         kwargs = {} if self.N_levels_max is None else {"N_levels_max": self.N_levels_max}
-        self.line_cooling = LineCoolingSet(names, **kwargs)
+        self.line_cooling = line_cooling.LineCoolingSet(names, **kwargs)
         if self.line_cooling.missing:
             print(f"  line cooling data are missing for: {' '.join(n for n in self.line_cooling.missing if n != 'none')}", flush=True)
 
@@ -154,13 +154,13 @@ class PhotoionizationModel:
         q_CI = numpy.array([ion.q_CI(T) for ion in self.ions])
         if self.recombination_case == "B":
             # HII 領域向け: H II → H I, He II → He I, He III → He II を Case B の近似式に置き換える
-            case_B = {"H01": HI_alphaB, "He02": HeI_alphaB, "He01": HeII_alphaB}
+            case_B = {"H01": recombination.HI_alphaB, "He02": recombination.HeI_alphaB, "He01": recombination.HeII_alphaB}
             for k, ion in enumerate(self.ions):
                 if ion.charge > 0:
                     lower_symbol = self.ions[k - 1].symbol
                     if lower_symbol in case_B:
                         alpha_RR[k] = case_B[lower_symbol](T)
-                        rr_cooling[k] = alpha_RR[k] * k_B * T * radiative_recombination_energy_factor(T, ion.charge)
+                        rr_cooling[k] = alpha_RR[k] * constants.k_B * T * atomic_data.radiative_recombination_energy_factor(T, ion.charge)
                         alpha_DR[k] = 0.0
                         dr_cooling[k] = 0.0
         self.alpha_RR_table = _log10_table(alpha_RR)
@@ -310,13 +310,13 @@ class PhotoionizationModel:
 
                         def cooling_terms(T):
                             alpha_RR, alpha_DR, rr_cooling, dr_cooling, q_CI = self.rates_at(T)
-                            kT = k_B * T
+                            kT = constants.k_B * T
                             terms = {
                                 "line": numpy.sum(n_ion * self.line_cooling.rate(T, line_table)),
                                 "recombination_RR": numpy.sum(n_e * n_ion * rr_cooling),
                                 "recombination_DR": numpy.sum(n_e * n_ion * dr_cooling),
                                 "collisional_ionization": numpy.sum(n_e * n_ion * q_CI * self.ion_ip_erg),
-                                "bremsstrahlung": Lambda_ff_0 * g_ff(T) * numpy.sqrt(T) * n_e * numpy.sum(charge2 * n_ion),
+                                "bremsstrahlung": constants.Lambda_ff_0 * bremsstrahlung.g_ff(T) * numpy.sqrt(T) * n_e * numpy.sum(charge2 * n_ion),
                                 "compton": cooling_compton_per_kT * kT,
                             }
                             return terms
