@@ -5,13 +5,24 @@
 # --- 制動放射 ---
 Lambda_ff_0 = 1.42e-27  # 制動放射冷却係数 [erg cm^3 s^-1 K^-0.5] (物理定数は各モジュールで astropy.constants を直接使う)
 
+import os
+
 # --- 原子データベース ---
 # 光電離断面積（電離限界振動数を含む）は FAC 原子データベースから読み込む (atomic_data.py)
 ATOMIC_DATA_DIR = "/Users/tanimoto/software/database/atomic_data"
 # 再結合係数（放射・二電子）、衝突電離断面積、電離ポテンシャル、輝線冷却のデータは CHIANTI から読み込む
 CHIANTI_DIR = "/Users/tanimoto/software/database/chianti"
+# 共有の FAC データベースにないイオン (電子数 > 10) の光電離断面積 (.pi) の補助ディレクトリ。
+# make_pi_from_fac.py で FAC の .rr から同じ形式で作り、<元素>/<元素><電子数>.pi として置く。ATOMIC_DATA_DIR になければここを探す
+FAC_SUPPLEMENT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "fac_supplement")
+# 中性原子の光吸収断面積 (pe-cs-<Z>.dat: 列は エネルギー [MeV]、断面積 [barn]。Geant4 の EPDL97 と同じ形式)。
+# FAC にも FAC_SUPPLEMENT_DIR にも .pi がない中性原子 (Mg I など) に使う。
+# 既定は ~/github/neutral_matter が EPICS2025 (LLNL の最新の EPDL) から作った表 (閾値が実験値で、EPDL97 と同じ値)。
+# なければ MONACO の中性物質と同じ ~/software/database/neutral_matter/absorption の表を使う (geant4_epdl97 は閾値から、
+# xraylib_rtab は 10 eV からしかないので閾値 < 10 eV の原子には使えない)
+NEUTRAL_ABSORPTION_DIRS = ["/Users/tanimoto/github/neutral_matter/database/absorption/epics2025",
+                           "/Users/tanimoto/software/database/neutral_matter/absorption/geant4_epdl97"]
 # H 原子との電荷交換の係数 (Kingdon & Ferland 1996 のフィット、Cloudy のデータファイルの写し) はこのリポジトリに同梱
-import os
 CHARGE_EXCHANGE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "charge_exchange")
 
 # --- 元素 ---
@@ -36,4 +47,4 @@ ABUNDANCES_ANGR = {
 BENCHMARK_ELEMENTS = ["H", "He", "C", "N", "O", "Ne", "Mg", "Si", "S", "Ar", "Ca", "Cr", "Mn", "Fe", "Ni"]
 
 # HII 領域モデル (run_simulation.py) の元素。存在比は ABUNDANCES_ANGR をそのまま使う
-HII_REGION_ELEMENTS = ["H", "He", "C", "N", "O", "Ne"]
+HII_REGION_ELEMENTS = ["H", "He", "C", "N", "O", "Ne", "Mg"]   # Mg I, II の光電離断面積は FAC_SUPPLEMENT_DIR

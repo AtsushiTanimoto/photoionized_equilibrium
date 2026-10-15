@@ -238,7 +238,7 @@ def fac_ion_symbol(element, number_of_electrons):
 
 def load_photoionization_channels(element, number_of_electrons, ionization_potential_eV):
     """
-    FAC 原子データベース (<ATOMIC_DATA_DIR>/<元素>/<元素><電子数>.pi) から
+    FAC 原子データベース (<ATOMIC_DATA_DIR>/<元素>/<元素><電子数>.pi、なければ <FAC_SUPPLEMENT_DIR>/…) から
     基底準位の光電離断面積のフィットパラメータを読み込む。
     各行: 束縛準位, 2J, 電離後の準位, 2J, 軌道 (n*1000+l), 電離ポテンシャル I [eV], Σ0 [cm^2], Γ, τ [eV]
     多電子イオンでは基底準位から複数のチャネル（電離後の励起準位や内殻電離）があるため、
@@ -248,7 +248,10 @@ def load_photoionization_channels(element, number_of_electrons, ionization_poten
     （チャネル間の閾値の差は FAC の値を保つ）。
     戻り値: [(I [eV], Σ0 [cm^2], Γ, τ [eV]), ...] (電離ポテンシャルの昇順)。ファイルがなければ None。
     """
-    filepath = os.path.join(constants.ATOMIC_DATA_DIR, element, f"{fac_ion_symbol(element, number_of_electrons)}.pi")
+    filename = f"{fac_ion_symbol(element, number_of_electrons)}.pi"
+    filepath = os.path.join(constants.ATOMIC_DATA_DIR, element, filename)
+    if not os.path.exists(filepath):
+        filepath = os.path.join(constants.FAC_SUPPLEMENT_DIR, element, filename)   # 電子数 > 10 のイオンの補助データ
     if not os.path.exists(filepath):
         return None
     channels = []
@@ -289,6 +292,44 @@ def photoionization_heating_cross_section(E_eV, channels):
     return heating
 
 
+def load_epdl97_table(Z, ionization_potential_eV):
+    """
+    中性原子の全光電離断面積の表 (EPICS2025 または EPDL97 の pe-cs-<Z>.dat、constants.NEUTRAL_ABSORPTION_DIRS の順に探す。
+    ファイル名の Z は 2 桁ゼロ埋めとなしの両方を試す) を読む。
+    列はエネルギー [MeV] と断面積 [barn]。1 行目は閾値で断面積 0。EPDL97 の閾値 (Hartree-Slater の束縛エネルギー) は
+    実験値とずれているので、閾値が ionization_potential_eV に一致するよう全エネルギーを同じ量だけずらす (EPICS2025 ではほぼ 0)。
+    戻り値: (E [eV] の昇順配列, σ [cm^2] の配列)。ファイルがなければ None。
+    """
+    filepath = None
+    for directory in constants.NEUTRAL_ABSORPTION_DIRS:
+        for name in (f"pe-cs-{Z:02d}.dat", f"pe-cs-{Z}.dat"):
+            if os.path.exists(os.path.join(directory, name)):
+                filepath = os.path.join(directory, name)
+                break
+        if filepath is not None:
+            break
+    if filepath is None:
+        return None
+    data = numpy.loadtxt(filepath)
+    E = data[:, 0] * 1.0e6
+    sigma = data[:, 1] * 1.0e-24
+    nonzero = numpy.nonzero(sigma > 0.0)[0]
+    threshold = E[nonzero[0]]
+    E = E + (ionization_potential_eV - threshold)
+    keep = E > 0.0
+    return E[keep], sigma[keep]
+
+
+def tabulated_cross_section(E_eV, table, threshold_eV):
+    """表 (E, σ) を log-log で内挿した断面積 [cm^2]。閾値未満と表の範囲外は 0"""
+    E_table, sigma_table = table
+    E = numpy.asarray(E_eV, dtype=float)
+    positive = sigma_table > 0.0
+    log_sigma = numpy.interp(numpy.log(numpy.maximum(E, 1e-300)), numpy.log(E_table[positive]), numpy.log(sigma_table[positive]),
+                             left=-numpy.inf, right=-numpy.inf)
+    return numpy.where(E < threshold_eV, 0.0, numpy.exp(log_sigma))
+
+
 # ---------------------------------------------------------------------------
 # イオン・元素のデータをまとめるクラス
 # ---------------------------------------------------------------------------
@@ -296,6 +337,7 @@ class IonData:
     """
     元素 element の電荷 charge のイオンの原子データ。
       channels:   光電離断面積のチャネル (裸のイオンや FAC データがないイオンでは None)
+      table:      中性原子で FAC データがないときの EPDL97 の断面積の表 (E [eV], σ [cm^2])。それ以外は None
       ip_eV:      電離ポテンシャル [eV] (裸のイオンでは None)
       rr, dr:     このイオンから 1 階下への再結合 (中性では None)
       di_shells:  このイオンの衝突電離断面積 (裸のイオンでは空)
@@ -310,10 +352,12 @@ class IonData:
         if charge < self.Z:
             self.ip_eV = ionization_potential(self.Z, charge)
             self.channels = load_photoionization_channels(element, self.number_of_electrons, self.ip_eV)
+            self.table = load_epdl97_table(self.Z, self.ip_eV) if (self.channels is None and charge == 0) else None
             self.di_shells = load_chianti_direct_ionization(element, charge)
         else:
             self.ip_eV = None
             self.channels = None
+            self.table = None
             self.di_shells = []
         if charge > 0:
             self.rr_type, self.rr_parameters, self.dr_energies, self.dr_coefficients = load_chianti_recombination(element, charge)
@@ -322,19 +366,24 @@ class IonData:
 
     @property
     def has_photoionization_data(self):
-        return self.channels is not None
+        return self.channels is not None or self.table is not None
 
     def photoionization_cross_section(self, E_eV):
-        """光電離断面積 [cm^2]（データがなければ 0）"""
-        if self.channels is None:
-            return numpy.zeros_like(numpy.asarray(E_eV, dtype=float))
-        return photoionization_cross_section(E_eV, self.channels)
+        """光電離断面積 [cm^2]（FAC のチャネル、なければ EPDL97 の表、どちらもなければ 0）"""
+        if self.channels is not None:
+            return photoionization_cross_section(E_eV, self.channels)
+        if self.table is not None:
+            return tabulated_cross_section(E_eV, self.table, self.ip_eV)
+        return numpy.zeros_like(numpy.asarray(E_eV, dtype=float))
 
     def photoionization_heating_cross_section(self, E_eV):
-        """光電離加熱の断面積 [erg cm^2]"""
-        if self.channels is None:
-            return numpy.zeros_like(numpy.asarray(E_eV, dtype=float))
-        return photoionization_heating_cross_section(E_eV, self.channels)
+        """光電離加熱の断面積 [erg cm^2]（EPDL97 の表では全吸収を最外殻の電離とみなし σ(E) (E − I) とする）"""
+        if self.channels is not None:
+            return photoionization_heating_cross_section(E_eV, self.channels)
+        if self.table is not None:
+            E = numpy.asarray(E_eV, dtype=float)
+            return tabulated_cross_section(E, self.table, self.ip_eV) * numpy.maximum(E - self.ip_eV, 0.0) * eV
+        return numpy.zeros_like(numpy.asarray(E_eV, dtype=float))
 
     def alpha_RR(self, T_gas):
         """放射再結合係数 (このイオン → 1 階下) [cm^3 s^-1]"""
@@ -369,7 +418,7 @@ class IonData:
 class ElementData:
     """
     元素の全電離段階のデータ。ions[j] は電荷 j のイオン (j = 0, ..., Z)。
-    FAC の光電離データがあるのは電子数 ≤ 10 のイオンだけなので、
+    FAC の光電離データがあるのは電子数 ≤ 10 のイオンだけ (FAC_SUPPLEMENT_DIR で補える) で、中性原子は EPDL97 で補うので、
     min_charge（光電離データのある最低の電荷）より低い電離段階は計算で扱わない。
     """
     def __init__(self, element):
