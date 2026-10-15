@@ -35,6 +35,7 @@ LOG_T_RATE_GRID = numpy.linspace(0.0, 9.0, 451)
 T_RATE_GRID = 10**LOG_T_RATE_GRID
 T_MIN = 10.0      # 熱収支を解く温度範囲 [K]
 T_MAX = 1.0e9
+THERMAL_T_GRID = numpy.geomspace(T_MIN, T_MAX, 161)   # 根の探索グリッド (0.05 dex)
 
 
 def _interpolate_log_table(T, table):
@@ -287,6 +288,18 @@ class PhotoionizationModel:
                 local_converged = False
                 last_local_it = 0
 
+                # 初期温度 T_loc と整合する電離状態から始める（初期の電離状態が温度と食い違っていると、
+                # 熱収支の根の選択が初期の電離状態に引きずられるため）
+                for _ in range(3):
+                    n_ion = self.ion_element_density * x_loc
+                    n_e = numpy.sum(self.ion_charge * n_ion)
+                    tau = (n_ion @ self.sigma_matrix) * dr
+                    phi = numpy.where(tau > 1e-8, -numpy.expm1(-numpy.minimum(tau, 700.0)) / numpy.maximum(tau, 1e-300), 1.0 - 0.5 * tau)
+                    Gamma = self.sigma_matrix @ (base * phi)
+                    if numpy.sum(Gamma) <= 0.0:
+                        break
+                    x_loc = self._solve_all_elements(Gamma, n_e, T_loc)
+
                 for local_it in range(max_local_iterations):
                     last_local_it = local_it
                     n_ion = self.ion_element_density * x_loc
@@ -336,10 +349,7 @@ class PhotoionizationModel:
                         if fixed_temperature is not None:
                             T_new = float(fixed_temperature)
                         else:
-                            try:
-                                T_new = scipy.optimize.brentq(thermal_balance_residual, T_MIN, T_MAX, xtol=1e-3, rtol=1e-6)
-                            except ValueError:
-                                T_new = T_MIN if thermal_balance_residual(T_MIN) > 0.0 else T_MAX
+                            T_new = self._solve_thermal_balance(thermal_balance_residual, T_loc)
 
                         # --- 電離平衡 ---
                         x_new = self._solve_all_elements(Gamma, n_e, T_new)
@@ -383,6 +393,26 @@ class PhotoionizationModel:
             print(f"Iteration {global_it + 1:2d}/{max_global_iterations}: max change in fractions = {max_diff:.2e}, "
                   f"in T = {max_diff_T:.2e}, cells hitting local iteration limit ({max_local_iterations}) = {N_unconverged_cells}  "
                   f"(elapsed time: {(time.time() - time_start_total) / 60.0:.3e} min)", flush=True)
+
+    def _solve_thermal_balance(self, residual, T_current):
+        """
+        熱収支 residual(T) = 冷却 - 加熱 = 0 の根を求める。
+        光電離プラズマでは高温解と低温解が共存する（熱的不安定性）ことがあるので、
+        温度グリッド THERMAL_T_GRID 上で符号変化をすべて探し、現在の温度 T_current に（log T で）最も近い根を brentq で求める。
+        根がなければ、残差の符号に応じて T_MIN または T_MAX を返す。
+        """
+        values = numpy.array([residual(T) for T in THERMAL_T_GRID])
+        sign_change = numpy.nonzero(values[:-1] * values[1:] <= 0.0)[0]
+        if len(sign_change) == 0:
+            return T_MIN if values[0] > 0.0 else T_MAX
+        roots = []
+        for k in sign_change:
+            if values[k] == 0.0:
+                roots.append(THERMAL_T_GRID[k])
+                continue
+            roots.append(scipy.optimize.brentq(residual, THERMAL_T_GRID[k], THERMAL_T_GRID[k + 1], xtol=1e-3, rtol=1e-6))
+        roots = numpy.array(roots)
+        return roots[numpy.argmin(numpy.abs(numpy.log(roots) - numpy.log(T_current)))]
 
     def _dominant_ions_string(self, i, elements=("H", "O", "Fe")):
         parts = []

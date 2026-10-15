@@ -71,7 +71,7 @@ def plot_ion_fractions(model=None, prefix="simulation", table=None, radius=None,
         labels = [f"{symbol} {ROMAN[j]}" for j in stages]
         fig, ax = matplotlib.pyplot.subplots(figsize=(max(8, 0.6 * (Z + 1) + 4), 7))
         width = 0.38
-        ax.bar(stages - 0.5 * width, numpy.maximum(fraction, 1e-12), width=width, label="this code")
+        ax.bar(stages - 0.5 * width, numpy.maximum(fraction, 1e-12), width=width, label="This code")
         if xstar is not None and symbol in xstar:
             ax.bar(stages + 0.5 * width, numpy.maximum(xstar[symbol], 1e-12), width=width, label="XSTAR")
         ax.set_yscale("log")

@@ -73,8 +73,8 @@ if __name__ == "__main__":
     table = visualization.read_tsv(args.tsv)
     ours = visualization._fractions_by_element(table)
     cell = args.cell
-    print(f"temperature: XSTAR = {T_xstar:.4e} K, this code = {table['Temperature'][cell]:.4e} K")
-    print(f"n_e:         XSTAR = {n_e_xstar:.4e},   this code = {table['n_e'][cell]:.4e} cm^-3")
+    print(f"temperature: XSTAR = {T_xstar:.4e} K, This code = {table['Temperature'][cell]:.4e} K")
+    print(f"n_e:         XSTAR = {n_e_xstar:.4e},   This code = {table['n_e'][cell]:.4e} cm^-3")
     print()
     print("ion fractions (stages with fraction > 1e-4 in either code)")
     for symbol in sorted(ours.keys(), key=lambda s: constants.ATOMIC_NUMBER[s]):
@@ -92,12 +92,12 @@ if __name__ == "__main__":
         heating_xstar, cooling_xstar = read_xstar_heating_cooling(fits_path, args.row)
         hc = visualization.read_tsv(args.heating)
         print()
-        print("heating [erg s^-1 cm^-3]           this code      XSTAR")
+        print("heating [erg s^-1 cm^-3]           This code      XSTAR")
         for symbol in sorted(ours.keys(), key=lambda s: constants.ATOMIC_NUMBER[s]):
             print(f"  {symbol:8s} {hc['heating_' + symbol][cell]:12.3e} {heating_xstar.get(ELEMENT_NAMES[symbol], numpy.nan):12.3e}")
         print(f"  {'compton':8s} {hc['heating_compton'][cell]:12.3e} {heating_xstar['compton']:12.3e}")
         print(f"  {'total':8s} {hc['heating_total'][cell]:12.3e} {heating_xstar['total']:12.3e}")
-        print("cooling [erg s^-1 cm^-3]           this code      XSTAR")
+        print("cooling [erg s^-1 cm^-3]           This code      XSTAR")
         for symbol in sorted(ours.keys(), key=lambda s: constants.ATOMIC_NUMBER[s]):
             print(f"  {symbol:8s} {hc['cooling_' + symbol][cell]:12.3e} {cooling_xstar.get(ELEMENT_NAMES[symbol], numpy.nan):12.3e}")
         for key in ("line", "recombination_RR", "recombination_DR", "collisional_ionization"):

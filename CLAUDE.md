@@ -28,6 +28,9 @@ python3 run_benchmark.py [--n-cells 1] [--n-packets 200000] [--iterations 2] [--
 python3 compare_xstar.py [XSTAR_DIR]   # 既定で benchmark/xstar の xout_abund1.fits と温度・イオン割合・加熱冷却を比較
 cd ../source
 python3 run_simulation.py        # 従来の HII 領域モデル（黒体星 4×10⁴ K、H + He + C + N、Case B）→ figures/hii_region_*.png
+cd ../benchmark
+python3 run_xstar.py --name hii_region --log-xi 3.5832 --trad 4.0e4 --luminosity 3.6469e38 --density 1.0e4 --column 3.0826e22 --temperature 1.0e4 --abundances H=1,He=1.0235,C=0.7945,N=0.6036   # HII 領域と同じ設定で XSTAR（約 4 分）
+python3 compare_hii_region.py    # 半径分布を XSTAR と重ねて figures/hii_region_<元素>_comparison.png, hii_region_temperature_comparison.png
 python3 visualization.py --file ../data/benchmark.tsv [--radial]   # TSV から図だけを再描画
 ```
 
@@ -44,7 +47,7 @@ python3 visualization.py --file ../data/benchmark.tsv [--radial]   # TSV から�
 - **`source.py`**: `BlackbodySource(T_BB, radius_cm=… | luminosity=…)`（光度指定は XSTAR の bbody と同じ 1〜1000 Ry で規格化）と `TabulatedSource.from_xstar(xout_spect1.fits)`。ビンごとの光子放出率とパケットの多項分布サンプリングを持つ。
 - **`equilibrium.py`** の `PhotoionizationModel(radius_edges, n_H, source, elements, abundances, …)`:
   - `setup_grids()`: エネルギービン（最低閾値〜光源の上限、対数）、全イオンの断面積行列 (N_ions × N_nu)、Compton の重み、再結合・衝突電離係数の温度表（log T = 0〜9）、輝線冷却のデータを準備する。
-  - `calculate_equilibrium()`: 3 重のループ。(1) グローバル反復: パケットをビンにサンプリングし重み `W` を持たせる。(2) 半径セルを内側から外側へ: 連続吸収法で `W` が exp(−τ) 減衰。(3) セル内の局所反復（緩和係数 0.5）: パスレングス・エスティメータ φ(τ) = (1 − e^{−τ})/τ で局所の光子フラックス c_E を求め、光電離率 Γ と加熱率 → `brentq` で熱収支（輝線 + RR + DR + 衝突電離 + 制動放射 + Compton 冷却 = 光電離加熱 + Compton 加熱）→ `_solve_all_elements()` で電離平衡（上向き Γ + n_e q_CI、下向き n_e (α_RR + α_DR)、対数で連鎖）。散乱による光子の輸送は入れていない。
+  - `calculate_equilibrium()`: 3 重のループ。(1) グローバル反復: パケットをビンにサンプリングし重み `W` を持たせる。(2) 半径セルを内側から外側へ: 連続吸収法で `W` が exp(−τ) 減衰。(3) セル内の局所反復（緩和係数 0.5）: パスレングス・エスティメータ φ(τ) = (1 − e^{−τ})/τ で局所の光子フラックス c_E を求め、光電離率 Γ と加熱率 → 熱収支（輝線 + RR + DR + 衝突電離 + 制動放射 + Compton 冷却 = 光電離加熱 + Compton 加熱）を `_solve_thermal_balance()` で解く（温度グリッド上で符号変化をすべて探し、現在の温度に最も近い根を `brentq` で求める。光電離プラズマは高温解と低温解が共存することがあり、log ξ = 3.0 では初期温度 ≥ 10⁶ K なら 2.1×10⁶ K、5×10⁴ K なら 8.4×10⁴ K に収束する。局所反復の最初に初期温度と整合する電離状態を作ってから始める）→ `_solve_all_elements()` で電離平衡（上向き Γ + n_e q_CI、下向き n_e (α_RR + α_DR)、対数で連鎖）。散乱による光子の輸送は入れていない。
   - 状態は `fraction_array[e]`（形状 (N_r, Z+1)、列 j が電荷 j）、`temperature_array`、`electron_density_array`、加熱・冷却の内訳 `heating_array`/`cooling_array`（元素ごと + Compton/制動放射など）。
   - `save_tsv()` の列は Radius_cm, Temperature, n_e, 各イオン（記号は `<元素><電子数 2 桁>`、裸は `<元素>00`。XSTAR CSV/MONACO と同じ規約）。`save_heating_cooling_tsv()` は内訳。`data/` は自動作成される。
   - `save_line_emission_tsv()`: 衝突励起による輝線をセルごと・イオンごと・線ごとに出力する（CHIANTI の準位番号、エネルギー、体積放射率 [photons s⁻¹ cm⁻³]、**光電離 1 回あたりの光子数** = 放射率/(Γ n_ion)）。後者は MONACO が光電離イベントごとに輝線を抽選する規格化で、MONACO の `.ln`（FAC の再結合カスケード、ce=0 で再生成する予定）の衝突励起成分に相当する。旧 `.ln` はイオン割合 1/(Z+1) を仮定して衝突励起を混ぜていたため光電離プラズマで過大だった。MONACO 側でセル（material）ごとの表を読む仕組みはまだない。
@@ -52,6 +55,9 @@ python3 visualization.py --file ../data/benchmark.tsv [--radial]   # TSV から�
 - **`benchmark/compare_xstar.py`**: XSTAR の `xout_abund1.fits`（ABUNDANCES の最終行。裸のイオンの列はなく 1 − Σ で求める。温度は 10⁴ K 単位、HEATING/COOLING は erg s⁻¹ cm⁻³）と比較する。**XSTAR の元素ごとの heating/cooling は共鳴線による連続光の散乱（吸収を加熱、再放射を冷却に計上）を含むため、元素ごとの値は本コードの光電離加熱・輝線冷却と直接は比べられず、差し引き（net）で比べる。**
 
 ## ベンチマークの現状 (2026-10-14)
+
+- XSTAR (HEASoft 6.37.1) は `xstar.f90` の `tinf`（温度下限）が未初期化で segfault することがある。ローカルの `~/software/heasoft/.../xstar/src/xstar/xstar.f90` に `tinf=1.d-3` を入れて再ビルド済み（`xstar.f90.orig` が元）。`benchmark/run_xstar.py` は黒体温度・光度・密度・柱密度・存在比を指定できる。
+- HII 領域モデルと XSTAR の比較（`compare_hii_region.py`）: 電離境界は本コード 0.165 pc、XSTAR 0.181 pc、HII 領域内の温度はどちらも約 1.3×10⁴ K。XSTAR は星の直近 (< 0.01 pc、log ξ > 3) で温度が 10 K の下限まで落ち、境界の外側でも H が 5〜25% 電離したまま温度 ≈ 10⁴ K を保つ（本コードは中性・18 K）。この外側の違いは XSTAR の入射黒体スペクトルの数値的な床が原因 (2026-10-15 に確認): `xout_spect1.fits` の incident は 200 eV までは Planck 関数に一致するが、それより上で減衰せず 300〜700 eV で約 10⁻⁹、1〜10 keV で約 10⁻¹⁹ (10³⁸ erg s⁻¹ erg⁻¹ 単位) の床が残る（真の Planck の 10¹¹〜10³⁷ 倍以上）。この 100 eV〜10 keV の光子 (約 3×10⁴⁹ s⁻¹) が電離境界を透過し、外側で必要な H 電離率 (約 10⁻¹⁰〜10⁻¹² s⁻¹) を桁で説明する。拡散放射（He II Lyα、再結合連続光）は中性 H に対する平均自由行程が短く原因ではない。物理的には本コードの「境界の外側は中性」が正しく、この領域の一致は比較の目標にしない。星直近の 10 K は別の問題で未調査。
 
 1 セル・2×10⁵ パケットで、イオン割合は XSTAR と主要な段階で 10〜20% 以内（Fe XXIII〜XXVII は 5% 以内、Cr/Mn/Ni の低い段階は約 2 倍）。温度は本コード 3.9×10⁶ K、XSTAR 2.9×10⁶ K。XSTAR の温度で収支を評価すると本コードは加熱 1.17×10⁻⁵ > 冷却 0.95×10⁻⁵ erg s⁻¹ cm⁻³。主な差: XSTAR の O VIII Lyα 衝突強度が過大（約 19 倍、XSTAR チームに報告済み）で XSTAR の O 冷却が約 2.6×10⁻⁶ 過大、本コードの制動放射が XSTAR より約 20% 大きい（Gaunt 因子 1.35 vs 約 1.1）、Fe/O の光電離加熱が本コードでやや大きい。未実装: Auger 電離（内殻光電離後の多重電離）、励起自動電離、電荷交換、散乱の輸送、ダスト。
 
