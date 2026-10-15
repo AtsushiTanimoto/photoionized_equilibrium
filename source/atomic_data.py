@@ -238,7 +238,7 @@ def fac_ion_symbol(element, number_of_electrons):
 
 def load_photoionization_channels(element, number_of_electrons, ionization_potential_eV):
     """
-    FAC 原子データベース (<ATOMIC_DATA_DIR>/<元素>/<元素><電子数>.pi、なければ <FAC_SUPPLEMENT_DIR>/…) から
+    FAC 原子データベース (<ATOMIC_DATA_DIR>/<元素>/<元素><電子数>.pi) から
     基底準位の光電離断面積のフィットパラメータを読み込む。
     各行: 束縛準位, 2J, 電離後の準位, 2J, 軌道 (n*1000+l), 電離ポテンシャル I [eV], Σ0 [cm^2], Γ, τ [eV]
     多電子イオンでは基底準位から複数のチャネル（電離後の励起準位や内殻電離）があるため、
@@ -248,10 +248,7 @@ def load_photoionization_channels(element, number_of_electrons, ionization_poten
     （チャネル間の閾値の差は FAC の値を保つ）。
     戻り値: [(I [eV], Σ0 [cm^2], Γ, τ [eV]), ...] (電離ポテンシャルの昇順)。ファイルがなければ None。
     """
-    filename = f"{fac_ion_symbol(element, number_of_electrons)}.pi"
-    filepath = os.path.join(constants.ATOMIC_DATA_DIR, element, filename)
-    if not os.path.exists(filepath):
-        filepath = os.path.join(constants.FAC_SUPPLEMENT_DIR, element, filename)   # 電子数 > 10 のイオンの補助データ
+    filepath = os.path.join(constants.ATOMIC_DATA_DIR, element, f"{fac_ion_symbol(element, number_of_electrons)}.pi")
     if not os.path.exists(filepath):
         return None
     channels = []
@@ -418,7 +415,7 @@ class IonData:
 class ElementData:
     """
     元素の全電離段階のデータ。ions[j] は電荷 j のイオン (j = 0, ..., Z)。
-    FAC の光電離データがあるのは電子数 ≤ 10 のイオンだけ (FAC_SUPPLEMENT_DIR で補える) で、中性原子は EPDL97 で補うので、
+    FAC の光電離データがないイオン (共有 DB に .pi がない) は扱えず、中性原子は EPICS2025 で補うので、
     min_charge（光電離データのある最低の電荷）より低い電離段階は計算で扱わない。
     """
     def __init__(self, element):
