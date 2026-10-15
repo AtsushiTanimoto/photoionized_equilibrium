@@ -19,6 +19,9 @@ pc = astropy.constants.pc.cgs.value  # パーセク [cm]
 FIGURE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "figures")
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 
+FRACTION_FLOOR = 1e-6    # イオン割合の図 (対数軸) の下限 (これ未満は XSTAR の出力の床・丸め誤差やモンテカルロの統計誤差で意味がない)
+
+
 def ion_label(symbol, charge):
     """図のラベル用のイオン記号: <元素><電子数 2 桁>（裸は <元素>00。save_tsv の列名と同じ規約）"""
     return f"{symbol}{constants.ATOMIC_NUMBER[symbol] - charge:02d}"
@@ -125,15 +128,15 @@ def plot_radial_profiles(model=None, prefix="simulation", table=None, radius=Non
         Z = fraction.shape[1] - 1
         seaborn.set_palette("hls", Z + 1)
         fig, ax = matplotlib.pyplot.subplots(figsize=(16, 9))
-        for j in range(Z + 1):
-            if numpy.max(fraction[:, j]) > 1e-6:
-                ax.plot(r_pc, fraction[:, j], linewidth=2, label=ion_label(symbol, j))
+        for j in range(Z + 1):   # 全電離段階を描く (対数軸)
+            ax.plot(r_pc, numpy.maximum(fraction[:, j], FRACTION_FLOOR), linewidth=2, label=ion_label(symbol, j))
         if R_s_cm is not None:
             ax.axvline(R_s_cm / pc, linestyle="--", color="gray", label="$R_s$")
         ax.set_xlabel("Distance from Star [pc]")
         ax.set_ylabel("Ionization Fraction")
-        ax.set_ylim([-0.05, 1.40])
-        ax.legend(loc="upper left", ncol=2, fontsize="small")
+        ax.set_yscale("log")
+        ax.set_ylim([FRACTION_FLOOR, 3.0])
+        ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0), ncol=1 if Z < 10 else 2, fontsize="x-small", borderaxespad=0.0)   # 凡例は図の外 (右)
         matplotlib.pyplot.tight_layout()
         matplotlib.pyplot.savefig(os.path.join(FIGURE_DIR, f"{prefix}_{symbol.lower()}_fraction.png"), dpi=150)
         matplotlib.pyplot.close(fig)

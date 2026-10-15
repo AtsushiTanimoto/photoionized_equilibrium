@@ -8,7 +8,6 @@ import time
 
 import equilibrium
 import source
-import visualization
 import constants
 
 # 物理定数 (cgs、astropy.constants の CODATA 値)
@@ -32,8 +31,8 @@ if __name__ == "__main__":
         recombination_case="B")     # H, He は Case B
     model.setup_grids()
     model.calculate_equilibrium(N_packets=200000, max_global_iterations=1, max_local_iterations=100)
-    print("Plotting results...", flush=True)
-    visualization.plot_radial_profiles(model, prefix="hii_region")
+    # 図は benchmark/compare_hii_region.py (XSTAR との比較図) で描く。本コードだけの図が必要なら
+    # cd source && python3 visualization.py --file ../data/hii_region.tsv --radial
     print("Saving results to TSV...", flush=True)
     print(model.save_tsv("hii_region.tsv"))
     print(model.save_heating_cooling_tsv("hii_region_heating_cooling.tsv"))
