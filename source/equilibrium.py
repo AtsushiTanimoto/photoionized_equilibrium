@@ -29,7 +29,7 @@ m_e_c2_eV = (astropy.constants.m_e * astropy.constants.c**2).to(astropy.units.eV
 pc = astropy.constants.pc.cgs.value  # パーセク [cm]
 
 
-DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+OUTPUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output")   # 計算結果の TSV の出力先
 
 # 再結合係数・衝突電離係数の表の温度グリッド [K] (log10 T = 0, ..., 9)
 LOG_T_RATE_GRID = numpy.linspace(0.0, 9.0, 451)
@@ -480,8 +480,8 @@ class PhotoionizationModel:
         計算結果を TSV ファイルとして保存する。
         列: Radius_cm, Temperature, n_e, 各イオンの割合（記号は <元素><電子数 2 桁>、裸のイオンは <元素>00）
         """
-        os.makedirs(DATA_DIR, exist_ok=True)
-        filepath = os.path.join(DATA_DIR, filename)
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        filepath = os.path.join(OUTPUT_DIR, filename)
         columns = [self.r_cm, self.temperature_array, self.electron_density_array]
         header = ["Radius_cm", "Temperature", "n_e"]
         for e, element in enumerate(self.elements):
@@ -502,8 +502,8 @@ class PhotoionizationModel:
         占有率は各セルの T, n_e, n_HI で解き直す。割合 < minimum_fraction のイオンと、
         光電離 1 回あたり < minimum_photons_per_ionization の線は書かない。
         """
-        os.makedirs(DATA_DIR, exist_ok=True)
-        filepath = os.path.join(DATA_DIR, filename)
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        filepath = os.path.join(OUTPUT_DIR, filename)
         with open(filepath, "w") as f:
             f.write("cell\tion\tchianti\tupper\tlower\tenergy_eV\tphotons_per_s_per_cm3\tphotons_per_photoionization\n")
             for i in range(self.N_r):
@@ -530,14 +530,14 @@ class PhotoionizationModel:
 
     def save_level_population_tsv(self, prefix="level_populations"):
         """
-        輝線冷却の多準位モデルで解いた準位占有数をイオンごとに TSV ファイル data/<prefix>/<イオン記号>.tsv として保存する。
+        輝線冷却の多準位モデルで解いた準位占有数をイオンごとに TSV ファイル output/<prefix>/<イオン記号>.tsv として保存する。
         行がセル、列が準位: Radius_cm, Temperature, n_e, n_ion (イオンの数密度 [cm^-3]), level_01, level_02, ...
         （level_k は CHIANTI の準位番号 k の占有率、イオン内で Σ = 1。準位の配置・項・エネルギーは CHIANTI の .elvlc を参照）。
         占有数は衝突励起・脱励起と自発放射だけの統計平衡（光励起・再結合カスケードは含まない）を
         各セルの T, n_e, n_HI で解き直したもの。輝線冷却のデータがないイオンは書かない。
         戻り値: 出力ディレクトリ
         """
-        directory = os.path.join(DATA_DIR, prefix)
+        directory = os.path.join(OUTPUT_DIR, prefix)
         os.makedirs(directory, exist_ok=True)
         n_HI_index = self.ion_symbols.index("H01") if "H01" in self.ion_symbols else None
         for k, (ion, model) in enumerate(zip(self.ions, self.line_cooling.ions)):
@@ -556,8 +556,8 @@ class PhotoionizationModel:
 
     def save_heating_cooling_tsv(self, filename="heating_cooling.tsv"):
         """加熱・冷却の内訳 [erg s^-1 cm^-3] を TSV ファイルとして保存する"""
-        os.makedirs(DATA_DIR, exist_ok=True)
-        filepath = os.path.join(DATA_DIR, filename)
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        filepath = os.path.join(OUTPUT_DIR, filename)
         columns = [self.r_cm, self.temperature_array]
         header = ["Radius_cm", "Temperature"]
         for key, value in self.heating_array.items():

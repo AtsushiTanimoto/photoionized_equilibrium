@@ -31,7 +31,7 @@ if __name__ == "__main__":
     parser.add_argument("--log-xi", type=float, default=3.5, help="電離パラメータ log ξ (内径 r_in = √(L/(n ξ)) で指定する)")
     parser.add_argument("--xstar-dir", default=None,
                         help="XSTAR の実行ディレクトリ (xout_abund1.fits)。図に XSTAR のイオン割合を重ねる。既定は xstar/logxi=<値>、\"\" で無効")
-    parser.add_argument("--output", default=None, help="data/<output>.tsv などの名前。既定は benchmark_logxi=<値>")
+    parser.add_argument("--output", default=None, help="output/<output>.tsv などの名前。既定は benchmark_logxi=<値>")
     args = parser.parse_args()
 
     time_start = time.time()

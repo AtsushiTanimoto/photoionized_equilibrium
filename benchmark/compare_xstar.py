@@ -1,5 +1,5 @@
 """
-XSTAR の出力と本コードの結果 (data/benchmark.tsv, data/benchmark_heating_cooling.tsv) を比較する
+XSTAR の出力と本コードの結果 (output/benchmark.tsv, output/benchmark_heating_cooling.tsv) を比較する
   python3 compare_xstar.py <XSTAR の実行ディレクトリ> [--row -1] [--cell -1]
 XSTAR の ABUNDANCES は先頭 2 行が同じ半径 (delta_r = 0) なので、既定では最後の行を使う。
 """
@@ -50,7 +50,7 @@ def read_xstar_heating_cooling(fits_path, row=-1):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--log-xi", type=float, default=3.5, help="比較する log ξ（xstar/logxi=<値>/ と data/benchmark_logxi=<値>*.tsv を使う）")
+    parser.add_argument("--log-xi", type=float, default=3.5, help="比較する log ξ（xstar/logxi=<値>/ と output/benchmark_logxi=<値>*.tsv を使う）")
     parser.add_argument("--xstar-dir", default=None, help="XSTAR の実行ディレクトリ（既定: xstar/logxi=<値>）")
     parser.add_argument("--tsv", default=None)
     parser.add_argument("--heating", default=None)
@@ -62,9 +62,9 @@ if __name__ == "__main__":
     if args.xstar_dir is None:
         args.xstar_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "xstar", f"logxi={args.log_xi:.3e}")
     if args.tsv is None:
-        args.tsv = os.path.join(visualization.DATA_DIR, f"{name}.tsv")
+        args.tsv = os.path.join(visualization.OUTPUT_DIR, f"{name}.tsv")
     if args.heating is None:
-        args.heating = os.path.join(visualization.DATA_DIR, f"{name}_heating_cooling.tsv")
+        args.heating = os.path.join(visualization.OUTPUT_DIR, f"{name}_heating_cooling.tsv")
     if args.prefix is None:
         args.prefix = name
 

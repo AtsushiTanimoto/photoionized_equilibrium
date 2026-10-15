@@ -1,8 +1,8 @@
 """
-HII 領域モデル (source/run_simulation.py の data/hii_region.tsv) と XSTAR (xstar/hii_region/xout_abund1.fits) の
+HII 領域モデル (source/run_simulation.py の output/hii_region.tsv) と XSTAR (xstar/hii_region/xout_abund1.fits) の
 半径分布を比較する。イオンごとに figures/hii_region_<イオン記号>_comparison.png (本コードと XSTAR を hls の 2 色で区別、対数軸) と
 figures/hii_region_temperature_comparison.png を描く。
-  python3 compare_hii_region.py [--xstar-dir xstar/hii_region] [--tsv ../data/hii_region.tsv]
+  python3 compare_hii_region.py [--xstar-dir xstar/hii_region] [--tsv ../output/hii_region.tsv]
 XSTAR の ABUNDANCES は半径ごとの行（先頭 2 行は同じ半径）で、裸のイオンの列はない (1 - Σ とする)。
 """
 import argparse
@@ -45,7 +45,7 @@ def read_xstar_profiles(fits_path, elements):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--xstar-dir", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "xstar", "hii_region"))
-    parser.add_argument("--tsv", default=os.path.join(visualization.DATA_DIR, "hii_region.tsv"))
+    parser.add_argument("--tsv", default=os.path.join(visualization.OUTPUT_DIR, "hii_region.tsv"))
     parser.add_argument("--prefix", default="hii_region")
     parser.add_argument("--table", default=None, help="この半径 [pc] (カンマ区切り) で全元素・全電離段階の割合を表にして表示する。例: 0.05,0.1,0.14")
     args = parser.parse_args()

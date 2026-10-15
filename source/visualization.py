@@ -1,7 +1,7 @@
 """
 計算結果の可視化
   plot_ion_fractions: 元素ごとの電離状態の割合（最内セルと最外セル）と温度・電子密度の半径分布
-  単独で実行すると data/*.tsv を読んで再描画する
+  単独で実行すると output/*.tsv を読んで再描画する
 """
 import matplotlib.pyplot
 import astropy.constants
@@ -17,7 +17,7 @@ pc = astropy.constants.pc.cgs.value  # パーセク [cm]
 
 # figureディレクトリのパス（プロジェクトルート直下）
 FIGURE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "figures")
-DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+OUTPUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output")   # 計算結果の TSV の置き場
 
 FRACTION_FLOOR = 1e-6    # イオン割合の図 (対数軸) の下限 (これ未満は XSTAR の出力の床・丸め誤差やモンテカルロの統計誤差で意味がない)
 
@@ -162,7 +162,7 @@ def read_tsv(filepath):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--file", default=os.path.join(DATA_DIR, "benchmark.tsv"))
+    parser.add_argument("--file", default=os.path.join(OUTPUT_DIR, "benchmark.tsv"))
     parser.add_argument("--prefix", default="benchmark")
     parser.add_argument("--radial", action="store_true", help="半径分布の図を描く（HII 領域モデル）")
     args = parser.parse_args()
