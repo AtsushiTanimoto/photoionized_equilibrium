@@ -1,5 +1,5 @@
 """
-HII 領域モデル（黒体星に照らされた一様密度ガス球、H + He + C + N + O）の光電離平衡計算のメインスクリプト
+HII 領域モデル（黒体星に照らされた一様密度ガス球、H + He + C + N + O + Ne）の光電離平衡計算のメインスクリプト
 """
 import astropy.constants
 import astropy.units
@@ -25,8 +25,8 @@ if __name__ == "__main__":
 
     model = equilibrium.PhotoionizationModel(
         radius_edges=radius_edges, hydrogen_number_density=hydrogen_number_density, source=light_source,
-        elements=["H", "He", "C", "N", "O"],
-        abundances={"H": 1.0, "He": constants.Y_He, "C": constants.A_C, "N": constants.A_N, "O": constants.A_O},
+        elements=constants.HII_REGION_ELEMENTS,
+        abundances={symbol: constants.ABUNDANCES_ANGR[symbol] for symbol in constants.HII_REGION_ELEMENTS},   # 太陽組成 angr (XSTAR と同じ)
         T_gas=1e4,                  # ガスの初期温度 [K]
         N_nu=1001,                  # エネルギービン数
         recombination_case="B")     # H, He は Case B
@@ -37,5 +37,6 @@ if __name__ == "__main__":
     print("Saving results to TSV...", flush=True)
     print(model.save_tsv("hii_region.tsv"))
     print(model.save_heating_cooling_tsv("hii_region_heating_cooling.tsv"))
+    print(model.save_level_population_tsv("hii_region_level_populations"))
     print("Done.", flush=True)
     print(f"Computation time: {(time.time() - time_start) / 60.0:.3e} min", flush=True)

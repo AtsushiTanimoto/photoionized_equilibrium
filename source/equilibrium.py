@@ -505,6 +505,32 @@ class PhotoionizationModel:
                         f.write(f"{i}\t{ion.symbol}\t{ion.chianti_name}\t{upper[m]}\t{lower[m]}\t{energy_eV[m]:.6e}\t{emissivity[m]:.6e}\t{per_ionization[m]:.6e}\n")
         return filepath
 
+    def save_level_population_tsv(self, prefix="level_populations"):
+        """
+        輝線冷却の多準位モデルで解いた準位占有数をイオンごとに TSV ファイル data/<prefix>/<イオン記号>.tsv として保存する。
+        行がセル、列が準位: Radius_cm, Temperature, n_e, n_ion (イオンの数密度 [cm^-3]), level_01, level_02, ...
+        （level_k は CHIANTI の準位番号 k の占有率、イオン内で Σ = 1。準位の配置・項・エネルギーは CHIANTI の .elvlc を参照）。
+        占有数は衝突励起・脱励起と自発放射だけの統計平衡（光励起・再結合カスケードは含まない）を
+        各セルの T, n_e, n_HI で解き直したもの。輝線冷却のデータがないイオンは書かない。
+        戻り値: 出力ディレクトリ
+        """
+        directory = os.path.join(DATA_DIR, prefix)
+        os.makedirs(directory, exist_ok=True)
+        n_HI_index = self.ion_symbols.index("H01") if "H01" in self.ion_symbols else None
+        for k, (ion, model) in enumerate(zip(self.ions, self.line_cooling.ions)):
+            if model is None:
+                continue
+            with open(os.path.join(directory, f"{ion.symbol}.tsv"), "w") as f:
+                f.write("Radius_cm\tTemperature\tn_e\tn_ion\t" + "\t".join(f"level_{m + 1:02d}" for m in range(model.N_levels)) + "\n")
+                for i in range(self.N_r):
+                    n_ion = self.ion_element_density * self._ion_fraction_vector(i)
+                    n_e = self.electron_density_array[i]
+                    T = self.temperature_array[i]
+                    n_HI = n_ion[n_HI_index] if n_HI_index is not None else 0.0
+                    populations = model.populations_at(n_e, n_HI, T)
+                    f.write(f"{self.r_cm[i]:.6e}\t{T:.6e}\t{n_e:.6e}\t{n_ion[k]:.6e}\t" + "\t".join(f"{x:.6e}" for x in populations) + "\n")
+        return directory
+
     def save_heating_cooling_tsv(self, filename="heating_cooling.tsv"):
         """加熱・冷却の内訳 [erg s^-1 cm^-3] を TSV ファイルとして保存する"""
         os.makedirs(DATA_DIR, exist_ok=True)

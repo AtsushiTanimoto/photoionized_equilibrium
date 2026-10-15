@@ -61,6 +61,7 @@ if __name__ == "__main__":
     print(model.save_tsv(f"{args.output}.tsv"))
     print(model.save_heating_cooling_tsv(f"{args.output}_heating_cooling.tsv"))
     print(model.save_line_emission_tsv(f"{args.output}_line_emission.tsv"))
+    print(model.save_level_population_tsv(f"{args.output}_level_populations"))
     print("Plotting results...", flush=True)
     xstar = None
     if args.xstar_dir:

@@ -45,16 +45,22 @@ def _read_until_terminator(filepath):
 def _read_elvlc(filepath):
     """
     準位ファイル (.elvlc) を読み込む。
-    戻り値: {準位番号: (統計的重み g, エネルギー [cm^-1])}
+    戻り値: {準位番号: (統計的重み g, エネルギー [cm^-1], 準位の名前 "配置 2S+1 L J")}
     観測値がない準位 (観測エネルギー < 0) は理論値を使う。
     """
     levels = {}
+    # CHIANTI の固定幅書式 (i7, a30, a5, i5, a5, f5.1, f15.3, f15.3)。C IV では "," 以降、Ne I では空白区切りで
+    # 余分な列が続くので、空白で分割せず固定幅で読む。
     for line in _read_until_terminator(filepath):
-        columns = line.split(",")[0].split()  # C IV などでは "," 以降に余分な列がある
-        index = int(columns[0])
-        J, energy_observed, energy_theory = float(columns[-3]), float(columns[-2]), float(columns[-1])
+        index = int(line[0:7])
+        configuration = line[7:37].strip()
+        multiplicity, L = line[42:47].strip(), line[47:52].strip()
+        J = float(line[52:57])
+        energy_observed, energy_theory = float(line[57:72]), float(line[72:87])
         energy = energy_observed if energy_observed >= 0.0 else energy_theory
-        levels[index] = (2.0 * J + 1.0, energy)
+        J_text = f"{J:g}" if J != int(J) else f"{int(J)}"
+        term = f"{configuration} {multiplicity}{L}{J_text}"
+        levels[index] = (2.0 * J + 1.0, energy, term)
     return levels
 
 
@@ -143,6 +149,7 @@ class LineCoolingIon:
         self.N_levels = N
         self.g = numpy.array([levels[i + 1][0] for i in range(N)])
         self.energy = numpy.array([levels[i + 1][1] for i in range(N)]) * h * c  # [erg]
+        self.term = [levels[i + 1][2] for i in range(N)]                             # 準位の名前（出力用）
         T = T_GRID[:, None]
 
         # 自発放射: A[i, j] は準位 i → j の遷移確率（エネルギーの高い方から低い方へ）
