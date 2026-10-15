@@ -66,8 +66,8 @@ if __name__ == "__main__":
         for j in range(Z + 1):
             if max(numpy.max(ours[symbol][:, j]), numpy.max(xstar[symbol][:, j])) < 1e-3:
                 continue
-            ax.plot(r_ours, ours[symbol][:, j], color=colors[j], linewidth=2, label=f"{symbol} {ROMAN[j]} (This code)")
-            ax.plot(r_xstar, xstar[symbol][:, j], color=colors[j], linewidth=2, linestyle="--", label=f"{symbol} {ROMAN[j]} (XSTAR)")
+            ax.plot(r_ours, ours[symbol][:, j], color=colors[j], linewidth=2, label=f"{visualization.ion_label(symbol, j)} (This code)")
+            ax.plot(r_xstar, xstar[symbol][:, j], color=colors[j], linewidth=2, linestyle="--", label=f"{visualization.ion_label(symbol, j)} (XSTAR)")
         ax.set_xlabel("Distance from Star [pc]")
         ax.set_ylabel("Ionization Fraction")
         ax.set_ylim([-0.05, 1.40])

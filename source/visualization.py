@@ -19,6 +19,11 @@ pc = astropy.constants.pc.cgs.value  # パーセク [cm]
 FIGURE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "figures")
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 
+def ion_label(symbol, charge):
+    """図のラベル用のイオン記号: <元素><電子数 2 桁>（裸は <元素>00。save_tsv の列名と同じ規約）"""
+    return f"{symbol}{constants.ATOMIC_NUMBER[symbol] - charge:02d}"
+
+
 ROMAN = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII", "XIII", "XIV", "XV", "XVI",
          "XVII", "XVIII", "XIX", "XX", "XXI", "XXII", "XXIII", "XXIV", "XXV", "XXVI", "XXVII", "XXVIII", "XXIX", "XXX", "XXXI"]
 
@@ -68,7 +73,7 @@ def plot_ion_fractions(model=None, prefix="simulation", table=None, radius=None,
         fraction = fractions[symbol][cell]
         Z = len(fraction) - 1
         stages = numpy.arange(Z + 1)
-        labels = [f"{symbol} {ROMAN[j]}" for j in stages]
+        labels = [ion_label(symbol, j) for j in stages]
         fig, ax = matplotlib.pyplot.subplots(figsize=(max(8, 0.6 * (Z + 1) + 4), 7))
         width = 0.38
         ax.bar(stages - 0.5 * width, numpy.maximum(fraction, 1e-12), width=width, label="This code")
@@ -121,7 +126,7 @@ def plot_radial_profiles(model=None, prefix="simulation", table=None, radius=Non
         fig, ax = matplotlib.pyplot.subplots(figsize=(16, 9))
         for j in range(Z + 1):
             if numpy.max(fraction[:, j]) > 1e-6:
-                ax.plot(r_pc, fraction[:, j], linewidth=2, label=f"{symbol} {ROMAN[j]}")
+                ax.plot(r_pc, fraction[:, j], linewidth=2, label=ion_label(symbol, j))
         if R_s_cm is not None:
             ax.axvline(R_s_cm / pc, linestyle="--", color="gray", label="$R_s$")
         ax.set_xlabel("Distance from Star [pc]")

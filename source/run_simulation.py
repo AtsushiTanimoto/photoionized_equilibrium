@@ -1,5 +1,5 @@
 """
-HII 領域モデル（黒体星に照らされた一様密度ガス球、H + He + C + N）の光電離平衡計算のメインスクリプト
+HII 領域モデル（黒体星に照らされた一様密度ガス球、H + He + C + N + O）の光電離平衡計算のメインスクリプト
 """
 import astropy.constants
 import astropy.units
@@ -25,7 +25,8 @@ if __name__ == "__main__":
 
     model = equilibrium.PhotoionizationModel(
         radius_edges=radius_edges, hydrogen_number_density=hydrogen_number_density, source=light_source,
-        elements=["H", "He", "C", "N"], abundances={"H": 1.0, "He": constants.Y_He, "C": constants.A_C, "N": constants.A_N},
+        elements=["H", "He", "C", "N", "O"],
+        abundances={"H": 1.0, "He": constants.Y_He, "C": constants.A_C, "N": constants.A_N, "O": constants.A_O},
         T_gas=1e4,                  # ガスの初期温度 [K]
         N_nu=1001,                  # エネルギービン数
         recombination_case="B")     # H, He は Case B
