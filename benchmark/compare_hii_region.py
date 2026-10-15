@@ -68,9 +68,8 @@ if __name__ == "__main__":
         for j in range(Z + 1):
             label = visualization.ion_label(symbol, j)
             fig, ax = matplotlib.pyplot.subplots(figsize=(16, 9))
-            ax.plot(r_ours, numpy.maximum(ours[symbol][:, j], FRACTION_FLOOR), color=colors[0], linewidth=2, label="This code")
-            ax.plot(r_xstar, numpy.maximum(xstar[symbol][:, j], FRACTION_FLOOR), color=colors[1], linewidth=2, label="XSTAR")
-            ax.set_title(label)
+            ax.plot(r_ours, numpy.maximum(ours[symbol][:, j], FRACTION_FLOOR), color=colors[0], linewidth=2, label=f"{label} (This code)")
+            ax.plot(r_xstar, numpy.maximum(xstar[symbol][:, j], FRACTION_FLOOR), color=colors[1], linewidth=2, label=f"{label} (XSTAR)")
             ax.set_xlabel("Distance from Star [pc]")
             ax.set_ylabel("Ionization Fraction")
             ax.set_yscale("log")
