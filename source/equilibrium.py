@@ -17,6 +17,7 @@ import time
 import constants
 import atomic_data
 import bremsstrahlung
+import charge_exchange
 import line_cooling
 import recombination
 
@@ -162,6 +163,9 @@ class PhotoionizationModel:
         rr_cooling = numpy.array([ion.rr_cooling(T) for ion in self.ions])
         dr_cooling = numpy.array([ion.dr_cooling(T) for ion in self.ions])
         q_CI = numpy.array([ion.q_CI(T) for ion in self.ions])
+        # H との電荷交換 (Kingdon & Ferland 1996): k_CX_rec はこのイオン + H I → 1 階下、k_CX_ion はこのイオン + H II → 1 階上
+        k_CX_rec = numpy.array([charge_exchange.recombination_rate(ion.Z, ion.charge, T) for ion in self.ions])
+        k_CX_ion = numpy.array([charge_exchange.ionization_rate(ion.Z, ion.charge, T) for ion in self.ions])
         if self.recombination_case == "B":
             # HII 領域向け: H II → H I, He II → He I, He III → He II を Case B の近似式に置き換える
             case_B = {"H01": recombination.HI_alphaB, "He02": recombination.HeI_alphaB, "He01": recombination.HeII_alphaB}
@@ -178,6 +182,8 @@ class PhotoionizationModel:
         self.rr_cooling_table = _log10_table(rr_cooling)
         self.dr_cooling_table = _log10_table(dr_cooling)
         self.q_CI_table = _log10_table(q_CI)
+        self.k_CX_rec_table = _log10_table(k_CX_rec)
+        self.k_CX_ion_table = _log10_table(k_CX_ion)
         self.rate_tables_ready = True
 
     def rates_at(self, T):
@@ -187,6 +193,11 @@ class PhotoionizationModel:
                 _interpolate_log_table(T, self.rr_cooling_table),
                 _interpolate_log_table(T, self.dr_cooling_table),
                 _interpolate_log_table(T, self.q_CI_table))
+
+    def charge_exchange_rates_at(self, T):
+        """温度 T での全イオンの H との電荷交換係数 (k_CX_rec: + H I → 1 階下, k_CX_ion: + H II → 1 階上) [cm³ s⁻¹]"""
+        return (_interpolate_log_table(T, self.k_CX_rec_table),
+                _interpolate_log_table(T, self.k_CX_ion_table))
 
     # ------------------------------------------------------------------
     # 電離平衡
@@ -230,16 +241,28 @@ class PhotoionizationModel:
         x = numpy.exp(log_x)
         return x / numpy.sum(x)
 
-    def _solve_all_elements(self, Gamma, n_e, T):
-        """全元素の電離平衡を解いて、全イオンの割合（ion_list の順）を返す"""
+    def _hydrogen_densities(self, n_ion):
+        """全イオンの数密度ベクトルから (n_HI, n_HII) を返す (H がなければ 0)"""
+        n_HI = n_ion[self.ion_symbols.index("H01")] if "H01" in self.ion_symbols else 0.0
+        n_HII = n_ion[self.ion_symbols.index("H00")] if "H00" in self.ion_symbols else 0.0
+        return n_HI, n_HII
+
+    def _solve_all_elements(self, Gamma, n_e, T, n_HI=0.0, n_HII=0.0):
+        """
+        全元素の電離平衡を解いて、全イオンの割合（ion_list の順）を返す。
+        上向き: 光電離 Γ + 衝突電離 n_e q_CI + H II との電荷交換 n_HII k_CX_ion、
+        下向き: 再結合 n_e (α_RR + α_DR) + H I との電荷交換 n_HI k_CX_rec。
+        電荷交換の H の密度は呼び出し側が直前の電離状態から渡す (局所反復で自己無撞着になる)。
+        """
         alpha_RR, alpha_DR, _, _, q_CI = self.rates_at(T)
+        k_CX_rec, k_CX_ion = self.charge_exchange_rates_at(T)
         alpha = alpha_RR + alpha_DR
         x = numpy.empty(self.N_ions)
         for e, element in enumerate(self.elements):
             k = self.ion_offset[e]
             n = element.Z + 1 - element.min_charge
-            up = Gamma[k:k + n - 1] + n_e * q_CI[k:k + n - 1]
-            down = n_e * alpha[k + 1:k + n]
+            up = Gamma[k:k + n - 1] + n_e * q_CI[k:k + n - 1] + n_HII * k_CX_ion[k:k + n - 1]
+            down = n_e * alpha[k + 1:k + n] + n_HI * k_CX_rec[k + 1:k + n]
             x[k:k + n] = self._solve_ionization_balance(up, down)
         return x
 
@@ -298,7 +321,7 @@ class PhotoionizationModel:
                     Gamma = self.sigma_matrix @ (base * phi)
                     if numpy.sum(Gamma) <= 0.0:
                         break
-                    x_loc = self._solve_all_elements(Gamma, n_e, T_loc)
+                    x_loc = self._solve_all_elements(Gamma, n_e, T_loc, *self._hydrogen_densities(n_ion))
 
                 for local_it in range(max_local_iterations):
                     last_local_it = local_it
@@ -352,7 +375,7 @@ class PhotoionizationModel:
                             T_new = self._solve_thermal_balance(thermal_balance_residual, T_loc)
 
                         # --- 電離平衡 ---
-                        x_new = self._solve_all_elements(Gamma, n_e, T_new)
+                        x_new = self._solve_all_elements(Gamma, n_e, T_new, *self._hydrogen_densities(n_ion))
 
                     # 収束判定
                     if numpy.max(numpy.abs(x_new - x_loc)) < fraction_tolerance and abs(T_new - T_loc) < temperature_tolerance * T_loc:

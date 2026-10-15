@@ -10,6 +10,9 @@ Lambda_ff_0 = 1.42e-27  # 制動放射冷却係数 [erg cm^3 s^-1 K^-0.5] (物�
 ATOMIC_DATA_DIR = "/Users/tanimoto/software/database/atomic_data"
 # 再結合係数（放射・二電子）、衝突電離断面積、電離ポテンシャル、輝線冷却のデータは CHIANTI から読み込む
 CHIANTI_DIR = "/Users/tanimoto/software/database/chianti"
+# H 原子との電荷交換の係数 (Kingdon & Ferland 1996 のフィット、Cloudy のデータファイルの写し) はこのリポジトリに同梱
+import os
+CHARGE_EXCHANGE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "charge_exchange")
 
 # --- 元素 ---
 ELEMENT_SYMBOLS = [

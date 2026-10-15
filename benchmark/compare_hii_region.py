@@ -78,8 +78,9 @@ if __name__ == "__main__":
         matplotlib.pyplot.close(fig)
 
     fig, ax = matplotlib.pyplot.subplots(figsize=(16, 9))
-    ax.plot(r_ours, table["Temperature"], color="tab:orange", linewidth=2, label="This code")
-    ax.plot(r_xstar, T_xstar, color="tab:orange", linewidth=2, linestyle="--", label="XSTAR")
+    colors = seaborn.color_palette("hls", 2)
+    ax.plot(r_ours, table["Temperature"], color=colors[0], linewidth=2, label="This code")
+    ax.plot(r_xstar, T_xstar, color=colors[1], linewidth=2, linestyle="--", label="XSTAR")
     ax.set_xlabel("Distance from Star [pc]")
     ax.set_ylabel("Temperature [K]")
     ax.set_yscale("log")
