@@ -56,7 +56,7 @@ class PhotoionizationModel:
     def __init__(self, radius_edges, hydrogen_number_density, source,
                  elements=constants.BENCHMARK_ELEMENTS, abundances=constants.ABUNDANCES_ANGR,
                  T_gas=1e4, N_nu=2000, E_min_eV=None, E_max_eV=None,
-                 recombination_case="A", N_levels_max=None, auger=True, diffuse=False):
+                 recombination_case="A", N_levels_max=None, auger=True, diffuse=False, line_transfer=False, turbulence_km_s=0.0):
         """
         radius_edges:            半径セルの境界 [cm]（長さ N_r + 1、昇順）
         hydrogen_number_density: 全水素数密度 [cm^-3]（一様）
@@ -86,6 +86,9 @@ class PhotoionizationModel:
         self.N_levels_max = N_levels_max
         self.auger = auger              # 内殻光電離に続く Auger 電離 (2 段電離と Auger 電子の加熱) を入れるか
         self.diffuse = diffuse          # H, He の拡散光を外向き近似で輸送するか (True なら recombination_case は "A")
+        self.line_transfer = line_transfer   # 輝線の光学的厚さを脱出確率で入れるか (輝線冷却と輝線放射に効く)
+        self.turbulence_km_s = turbulence_km_s   # 輝線のドップラー幅に足す乱流速度 [km/s]
+        self.line_betas = None          # セルごと・イオンごとの脱出確率 (line_transfer=True のとき 2 回目以降のグローバル反復で更新)
         if diffuse and recombination_case != "A":
             raise ValueError("diffuse=True では拡散光を陽に扱うので recombination_case='A' にする")
 
@@ -418,8 +421,11 @@ class PhotoionizationModel:
         progress_interval = max(self.N_r // 20, 1)
 
         self.global_converged = False
+        self.line_betas = None
         self.global_iterations_done = 0
         for global_it in range(max_global_iterations):
+            if self.line_transfer and global_it > 0:
+                self._update_line_betas()   # 前回の反復の状態から輝線の光学的厚さと脱出確率を求める
             previous_fractions = [fraction.copy() for fraction in self.fraction_array]
             previous_T = self.temperature_array.copy()
             W = self.source.sample_packet_counts(self.Q_bin, N_packets, rng)   # ビンごとのパケット数（重み 1）
@@ -486,7 +492,7 @@ class PhotoionizationModel:
                         T_new = T_MIN
                     else:
                         # --- 熱収支から温度を求める ---
-                        line_table = self.line_cooling.table(n_e, n_HI, x_loc)
+                        line_table = self.line_cooling.table(n_e, n_HI, x_loc, self._cell_betas(i))
                         def cooling_terms(T):
                             alpha_RR, alpha_DR, rr_cooling, dr_cooling, q_CI = self.rates_at(T)
                             kT = k_B * T
@@ -567,6 +573,51 @@ class PhotoionizationModel:
             print(f"Not converged within {max_global_iterations} global iterations "
                   f"(mean change: fractions < {global_fraction_tolerance:.1e}, T < {global_temperature_tolerance:.1e} not reached)", flush=True)
 
+    def _cell_betas(self, i):
+        """セル i のイオンごとの脱出確率のリスト (line_transfer が無効か 1 回目の反復なら None)"""
+        return None if self.line_betas is None else self.line_betas[i]
+
+    def _update_line_betas(self):
+        """
+        現在の (前回のグローバル反復の) 温度・電離状態から、全輝線の線中心の光学的厚さと脱出確率を求める。
+          セル i の光学的厚さ  Δτ_i = 1.497×10⁻¹⁵ f_lu λ[Å] N_l / b[km/s] × (1 − g_l n_u / (g_u n_l))、N_l = n_l Δr_i
+          b = √(2kT/m + v_turb²)。内向き τ_in = Σ_{j<i} Δτ_j + Δτ_i/2、外向き τ_out = τ_total − τ_in。
+          β = [β(τ_in) + β(τ_out)] / 2 (line_cooling.escape_probability、静的な媒質のドップラー線)。
+        準位占有数は前回の β で解き直す。輝線の速度場 (膨張) は考えない。
+        """
+        amu = astropy.constants.u.cgs.value
+        n_HI_index = self.ion_symbols.index("H01") if "H01" in self.ion_symbols else None
+        dtau = [[None] * self.N_ions for _ in range(self.N_r)]
+        for i in range(self.N_r):
+            n_ion = self.ion_element_density * self._ion_fraction_vector(i)
+            n_e = self.electron_density_array[i]
+            T = self.temperature_array[i]
+            n_HI = n_ion[n_HI_index] if n_HI_index is not None else 0.0
+            previous = self._cell_betas(i)
+            for k, model in enumerate(self.line_cooling.ions):
+                if model is None or n_ion[k] <= 0.0:
+                    continue
+                populations = model.populations_at(n_e, n_HI, T, None if previous is None else previous[k])
+                n_l = n_ion[k] * populations[model.line_lower]
+                n_u = n_ion[k] * populations[model.line_upper]
+                stimulated = numpy.clip(1.0 - (model.g[model.line_lower] * n_u) / (model.g[model.line_upper] * numpy.maximum(n_l, 1e-300)), 0.0, 1.0)
+                mass = constants.ATOMIC_MASS[self.ions[k].element] * amu
+                b_km_s = numpy.sqrt(2.0 * k_B * T / mass / 1.0e10 + self.turbulence_km_s**2)
+                dtau[i][k] = 1.497e-15 * model.line_f * model.line_wavelength_angstrom * n_l * self.dr_cm[i] / b_km_s * stimulated
+        betas = [[None] * self.N_ions for _ in range(self.N_r)]
+        for k, model in enumerate(self.line_cooling.ions):
+            if model is None:
+                continue
+            zero = numpy.zeros(len(model.line_A))
+            column = numpy.array([dtau[i][k] if dtau[i][k] is not None else zero for i in range(self.N_r)])   # (N_r, N_lines)
+            cumulative = numpy.cumsum(column, axis=0)
+            tau_in = cumulative - 0.5 * column
+            tau_out = cumulative[-1] - tau_in
+            beta = 0.5 * (line_cooling.escape_probability(tau_in) + line_cooling.escape_probability(tau_out))
+            for i in range(self.N_r):
+                betas[i][k] = beta[i]
+        self.line_betas = betas
+
     def _solve_thermal_balance(self, residual, T_current):
         """
         熱収支 residual(T) = 冷却 - 加熱 = 0 の根を求める。
@@ -616,7 +667,7 @@ class PhotoionizationModel:
         # 元素ごとの冷却（輝線 + 再結合 + 衝突電離）
         alpha_RR, alpha_DR, rr_cooling, dr_cooling, q_CI = self.rates_at(T)
         n_HI = n_ion[self.ion_symbols.index("H01")] if "H01" in self.ion_symbols else 0.0
-        line_table = self.line_cooling.table(n_e, n_HI, self._ion_fraction_vector(i))
+        line_table = self.line_cooling.table(n_e, n_HI, self._ion_fraction_vector(i), self._cell_betas(i))
         per_ion = (n_ion * self.line_cooling.rate(T, line_table) + n_e * n_ion * rr_cooling +
                    n_e * n_ion * dr_cooling + n_e * n_ion * q_CI * self.ion_ip_erg)
         for e, symbol in enumerate(self.element_symbols):
@@ -668,7 +719,8 @@ class PhotoionizationModel:
                     ionization_rate = self.gamma_array[i, k] * n_ion[k]   # [s^-1 cm^-3]
                     if ionization_rate <= 0.0:
                         continue
-                    upper, lower, energy_eV, photons = model.line_emission(n_e, n_HI, T)
+                    betas = self._cell_betas(i)
+                    upper, lower, energy_eV, photons = model.line_emission(n_e, n_HI, T, None if betas is None else betas[k])
                     emissivity = photons * n_ion[k]
                     per_ionization = emissivity / ionization_rate
                     order = numpy.argsort(energy_eV)
@@ -700,7 +752,8 @@ class PhotoionizationModel:
                     n_e = self.electron_density_array[i]
                     T = self.temperature_array[i]
                     n_HI = n_ion[n_HI_index] if n_HI_index is not None else 0.0
-                    populations = model.populations_at(n_e, n_HI, T)
+                    betas = self._cell_betas(i)
+                    populations = model.populations_at(n_e, n_HI, T, None if betas is None else betas[k])
                     f.write(f"{self.r_cm[i]:.6e}\t{T:.6e}\t{n_e:.6e}\t{n_ion[k]:.6e}\t" + "\t".join(f"{x:.6e}" for x in populations) + "\n")
         return directory
 

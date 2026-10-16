@@ -65,12 +65,24 @@ def _read_elvlc(filepath):
 
 
 def _read_wgfa(filepath):
-    """放射遷移ファイル (.wgfa) を読み込む。戻り値: [(準位1, 準位2, A [s^-1]), ...]"""
+    """放射遷移ファイル (.wgfa) を読み込む。戻り値: [(準位1, 準位2, A [s^-1], gf), ...]"""
     transitions = []
     for line in _read_until_terminator(filepath):
         columns = line.split()
-        transitions.append((int(columns[0]), int(columns[1]), float(columns[4])))
+        transitions.append((int(columns[0]), int(columns[1]), float(columns[4]), float(columns[3])))
     return transitions
+
+
+def escape_probability(tau):
+    """
+    線中心の光学的厚さ tau (片側) に対する静的な媒質の脱出確率 β (ドップラー線、XSTAR の pescl と同じ式で片側の値)
+      τ < 1: (1 − e^{−2τ}) / (2τ)、τ ≥ 1: 1 / [τ √π (1.2 + 0.5 √(ln τ) / (1 + τ/10⁵))]
+    """
+    tau = numpy.asarray(tau, dtype=float)
+    small = numpy.where(tau < 1e-5, 1.0, -numpy.expm1(-2.0 * numpy.minimum(tau, 1.0)) / (2.0 * numpy.maximum(tau, 1e-300)))
+    big_tau = numpy.maximum(tau, 1.0)
+    large = 1.0 / (big_tau * numpy.sqrt(numpy.pi) * (1.2 + 0.5 * numpy.sqrt(numpy.log(big_tau)) / (1.0 + big_tau / 1.0e5)))
+    return numpy.where(tau < 1.0, small, large)
 
 
 def _read_scups(filepath):
@@ -154,21 +166,25 @@ class LineCoolingIon:
 
         # 自発放射: A[i, j] は準位 i → j の遷移確率（エネルギーの高い方から低い方へ）
         self.A = numpy.zeros((N, N))
-        for level1, level2, A in _read_wgfa(os.path.join(directory, f"{name}.wgfa")):
+        gf = numpy.zeros((N, N))
+        for level1, level2, A, gf_value in _read_wgfa(os.path.join(directory, f"{name}.wgfa")):
             i, j = level1 - 1, level2 - 1
             if i >= N or j >= N or i == j or A <= 0.0:
                 continue
             upper, lower = (i, j) if self.energy[i] > self.energy[j] else (j, i)
             self.A[upper, lower] += A
-        # 輝線の一覧 (上準位, 下準位, A [s^-1], エネルギー [erg]) — 放射率の出力に使う
+            gf[upper, lower] += max(gf_value, 0.0)
+        # 輝線の一覧 (上準位, 下準位, A [s^-1], エネルギー [erg], 吸収の振動子強度 f_lu) — 放射率の出力と光学的厚さに使う
         upper_index, lower_index = numpy.nonzero(self.A)
         self.line_upper = upper_index
         self.line_lower = lower_index
         self.line_A = self.A[upper_index, lower_index]
         self.line_energy = self.energy[upper_index] - self.energy[lower_index]
-        delta_E = numpy.maximum(self.energy[:, None] - self.energy[None, :], 0.0)
+        self.line_f = gf[upper_index, lower_index] / self.g[lower_index]
+        self.line_wavelength_angstrom = h * c / numpy.maximum(self.line_energy, 1e-300) * 1.0e8
+        self.delta_E = numpy.maximum(self.energy[:, None] - self.energy[None, :], 0.0)
         # 各準位から自発放射で放出されるエネルギー Σ_j A_ij ΔE_ij [erg s^-1]
-        self.radiated_power = numpy.sum(self.A * delta_E, axis=1)
+        self.radiated_power = numpy.sum(self.A * self.delta_E, axis=1)
 
         # 電子衝突: C_e[t, i, j] は温度 T_GRID[t] で準位 i → j の係数 [cm^3 s^-1]
         self.C_e = numpy.zeros((len(T_GRID), N, N))
@@ -193,14 +209,25 @@ class LineCoolingIon:
         C_matrix[:, upper, lower] += q_down
         C_matrix[:, lower, upper] += q_down * self.g[upper] / self.g[lower] * boltzmann
 
-    def populations_at(self, n_e, n_HI, T_gas):
-        """温度 T_gas [K] での準位占有率（Σ = 1）。衝突係数は温度グリッドから log T で線形内挿する。"""
+    def effective_A(self, beta=None):
+        """
+        脱出確率 beta (輝線の一覧 line_upper/line_lower と同じ順の配列) をかけた自発放射の行列 A β。
+        beta が None なら光学的に薄い (β = 1)。閉じ込められた光子はその場で再吸収されるとみなす (正味の放射は A β)。
+        """
+        if beta is None:
+            return self.A
+        A = numpy.zeros_like(self.A)
+        A[self.line_upper, self.line_lower] = self.line_A * beta
+        return A
+
+    def populations_at(self, n_e, n_HI, T_gas, beta=None):
+        """温度 T_gas [K] での準位占有率（Σ = 1）。衝突係数は温度グリッドから log T で線形内挿する。beta は脱出確率 (effective_A)。"""
         log_T = numpy.clip(numpy.log10(T_gas), LOG_T_GRID[0], LOG_T_GRID[-1])
         k = min(max(int(numpy.searchsorted(LOG_T_GRID, log_T)), 1), len(LOG_T_GRID) - 1)
         w = (log_T - LOG_T_GRID[k - 1]) / (LOG_T_GRID[k] - LOG_T_GRID[k - 1])
         C_e = (1.0 - w) * self.C_e[k - 1] + w * self.C_e[k]
         C_H = (1.0 - w) * self.C_H[k - 1] + w * self.C_H[k]
-        R = self.A + n_e * C_e + n_HI * C_H
+        R = self.effective_A(beta) + n_e * C_e + n_HI * C_H
         R[1:, 0] += 1e-30
         L = R.T.copy()
         diagonal = numpy.arange(self.N_levels)
@@ -210,21 +237,24 @@ class LineCoolingIon:
         b[0] = 1.0
         return numpy.maximum(numpy.linalg.solve(L, b), 0.0)
 
-    def line_emission(self, n_e, n_HI, T_gas):
+    def line_emission(self, n_e, n_HI, T_gas, beta=None):
         """
-        温度 T_gas での各輝線の光子放射率 [photons s^-1]（イオン 1 個あたり）
+        温度 T_gas での各輝線の光子放射率 [photons s^-1]（イオン 1 個あたり。beta があれば脱出する分 n_u A β）
         戻り値: (上準位 (1 始まり), 下準位 (1 始まり), エネルギー [eV], 光子放射率) の配列の組
         """
-        populations = self.populations_at(n_e, n_HI, T_gas)
-        photons = populations[self.line_upper] * self.line_A
+        populations = self.populations_at(n_e, n_HI, T_gas, beta)
+        photons = populations[self.line_upper] * self.line_A * (1.0 if beta is None else beta)
         return self.line_upper + 1, self.line_lower + 1, self.line_energy / eV, photons
 
-    def cooling_per_ion(self, n_e, n_HI):
+    def cooling_per_ion(self, n_e, n_HI, beta=None):
         """
         温度グリッド上の 1 イオンあたりの輝線冷却率 [erg s^-1]
-        統計平衡 Σ_j n_j R_ji = n_i Σ_j R_ij（R = A + n_e C_e + n_HI C_H）を Σ n_i = 1 のもとで解く。
+        統計平衡 Σ_j n_j R_ji = n_i Σ_j R_ij（R = A β + n_e C_e + n_HI C_H）を Σ n_i = 1 のもとで解く。
+        beta は脱出確率 (effective_A)。冷却は脱出する放射 Σ n_u A β ΔE。
         """
-        R = self.A[None, :, :] + n_e * self.C_e + n_HI * self.C_H
+        A = self.effective_A(beta)
+        radiated_power = numpy.sum(A * self.delta_E, axis=1) if beta is not None else self.radiated_power
+        R = A[None, :, :] + n_e * self.C_e + n_HI * self.C_H
         R[:, 1:, 0] += 1e-30  # どの遷移ともつながらない準位があっても行列が特異にならないようにする
         L = numpy.swapaxes(R, 1, 2).copy()
         diagonal = numpy.arange(self.N_levels)
@@ -233,7 +263,7 @@ class LineCoolingIon:
         b = numpy.zeros((len(T_GRID), self.N_levels, 1))
         b[:, 0, 0] = 1.0
         populations = numpy.linalg.solve(L, b)[:, :, 0]
-        return numpy.maximum(populations, 0.0) @ self.radiated_power
+        return numpy.maximum(populations, 0.0) @ radiated_power
 
 
 CACHE_RELATIVE_TOLERANCE = 1e-3  # n_e, n_HI の相対変化がこれ未満なら直前の表を再利用する
@@ -264,23 +294,26 @@ class LineCoolingSet:
             else:
                 self.missing.append(name)
             self.ions.append(None)
-        # イオンごとに直前に作った表のキャッシュ: [n_e, n_HI, log10 Λ(T_GRID)]
-        self._cache = [[None, None, None] for _ in self.ions]
+        # イオンごとに直前に作った表のキャッシュ: [n_e, n_HI, log10 Λ(T_GRID), β]
+        self._cache = [[None, None, None, None] for _ in self.ions]
 
-    def table(self, n_e, n_HI, fractions):
+    def table(self, n_e, n_HI, fractions, betas=None):
         """
         電子密度 n_e と H I 数密度 n_HI [cm^-3] における各イオンの輝線冷却率の表
         fractions: 各イオンの元素内での割合（長さ len(names)）。MINIMUM_ION_FRACTION 未満のイオンは解かない。
         戻り値: 形状 (len(names), len(T_GRID)) の log10 Λ [erg s^-1]（イオン 1 個あたり）
         局所反復の中で n_e, n_HI はほとんど変わらないため、イオンごとに直前の表をキャッシュして再利用する。
+        betas: イオンごとの脱出確率の配列 (None の要素や betas = None は光学的に薄い)。
         """
         table = numpy.full((len(self.ions), len(T_GRID)), LOG_COOLING_FLOOR)
         for k, ion in enumerate(self.ions):
             if ion is None or fractions[k] < MINIMUM_ION_FRACTION:
                 continue
+            beta = None if betas is None else betas[k]
             cache = self._cache[k]
-            if cache[2] is None or not (_close(n_e, cache[0]) and _close(n_HI, cache[1])):
-                cache[:] = [n_e, n_HI, numpy.log10(numpy.maximum(ion.cooling_per_ion(n_e, n_HI), 1e-300))]
+            same_beta = (beta is None and cache[3] is None) or (beta is not None and cache[3] is not None and numpy.array_equal(beta, cache[3]))
+            if cache[2] is None or not (_close(n_e, cache[0]) and _close(n_HI, cache[1]) and same_beta):
+                cache[:] = [n_e, n_HI, numpy.log10(numpy.maximum(ion.cooling_per_ion(n_e, n_HI, beta), 1e-300)), beta]
             table[k] = cache[2]
         return table
 

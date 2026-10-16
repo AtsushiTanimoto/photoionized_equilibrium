@@ -33,6 +33,10 @@ ELEMENT_SYMBOLS = [
     "K", "Ca", "Sc", "Ti", "V", "Cr", "Mn", "Fe",
     "Co", "Ni", "Cu", "Zn"]
 ATOMIC_NUMBER = {symbol: z + 1 for z, symbol in enumerate(ELEMENT_SYMBOLS)}
+# 標準原子量 [u] (輝線の熱的なドップラー幅に使う)
+ATOMIC_MASS = dict(zip(ELEMENT_SYMBOLS, [1.008, 4.0026, 6.94, 9.0122, 10.81, 12.011, 14.007, 15.999, 18.998, 20.180,
+                                        22.990, 24.305, 26.982, 28.085, 30.974, 32.06, 35.45, 39.948, 39.098, 40.078,
+                                        44.956, 47.867, 50.942, 51.996, 54.938, 55.845, 58.933, 58.693, 63.546, 65.38]))
 
 # 太陽組成 (Anders & Grevesse 1989、XSTAR の abundtbl=angr) の H に対する数密度比
 ABUNDANCES_ANGR = {

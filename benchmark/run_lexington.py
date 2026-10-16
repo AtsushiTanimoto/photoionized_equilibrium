@@ -245,7 +245,8 @@ def benchmark_quantities(model, model_name):
             ion_model = model.line_cooling.ions[k]
             if ion_model is None or n_ion[k] <= 0.0:
                 continue
-            _, _, energy_eV, photons = ion_model.line_emission(n_e, n_HI, T)
+            betas = model._cell_betas(i)
+            _, _, energy_eV, photons = ion_model.line_emission(n_e, n_HI, T, None if betas is None else betas[k])
             wavelength = hc_eV_angstrom / energy_eV
             selected = numpy.zeros(len(wavelength), dtype=bool)
             for lo, hi in ranges:
@@ -272,13 +273,14 @@ if __name__ == "__main__":
     parser.add_argument("--n-packets", type=int, default=200000)
     parser.add_argument("--case", default="B", choices=["A", "B"])
     parser.add_argument("--diffuse", action="store_true", help="H, He の拡散光を外向き近似で輸送する (Case A になる)")
+    parser.add_argument("--line-transfer", action="store_true", help="輝線の光学的厚さを脱出確率で入れる (2 回目以降の反復で効く)")
     parser.add_argument("--output", default=None, help="output/<output>.tsv (既定: lexington_<model>[_diffuse])")
     parser.add_argument("--plot-only", action="store_true", help="計算せず output/<output>_results.tsv から図だけを描き直す")
     args = parser.parse_args()
     reference = lexington_reference.MODELS[args.model]
     if args.output is None:
-        args.output = f"lexington_{args.model}" + ("_diffuse" if args.diffuse else "")
-    mode = "diffuse field (outward-only), Case A" if args.diffuse else f"Case {args.case}"
+        args.output = f"lexington_{args.model}" + ("_diffuse" if args.diffuse else "") + ("_lines" if args.line_transfer else "")
+    mode = ("diffuse field (outward-only), Case A" if args.diffuse else f"Case {args.case}") + (", line transfer" if args.line_transfer else "")
     if args.plot_only:
         results = read_results(args.output)
         print(plot_results(results, args.model, args.output, f"Lexington 2000 {args.model} ({mode})"))
@@ -294,7 +296,7 @@ if __name__ == "__main__":
     model = equilibrium.PhotoionizationModel(
         radius_edges=radius_edges, hydrogen_number_density=reference["n_H"], source=light_source,
         elements=elements, abundances=reference["abundances"], T_gas=1.0e4, N_nu=1001,
-        recombination_case="A" if args.diffuse else args.case, diffuse=args.diffuse)
+        recombination_case="A" if args.diffuse else args.case, diffuse=args.diffuse, line_transfer=args.line_transfer)
     model.setup_grids()
     model.calculate_equilibrium(N_packets=args.n_packets, max_global_iterations=args.iterations)
     print(model.save_tsv(f"{args.output}.tsv"))
