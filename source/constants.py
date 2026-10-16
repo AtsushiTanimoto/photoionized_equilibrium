@@ -45,4 +45,4 @@ ABUNDANCES_ANGR = {
 BENCHMARK_ELEMENTS = ["H", "He", "C", "N", "O", "Ne", "Mg", "Si", "S", "Ar", "Ca", "Cr", "Mn", "Fe", "Ni"]
 
 # HII 領域モデル (run_simulation.py) の元素。存在比は ABUNDANCES_ANGR をそのまま使う
-HII_REGION_ELEMENTS = ["H", "He", "C", "N", "O", "Ne", "Mg", "Si", "S"]   # 中性原子 (Mg I, Si I, S I) は EPICS2025 の表
+HII_REGION_ELEMENTS = ["H", "He", "C", "N", "O", "Ne", "Mg", "Si", "S", "Ar"]   # 中性原子 (Mg I, Si I, S I, Ar I) は EPICS2025 の表
