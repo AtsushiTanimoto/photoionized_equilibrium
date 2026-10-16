@@ -1,0 +1,51 @@
+title Lexington 2000 PN150
+blackbody 150000
+luminosity total 37.557146
+radius 17.000000
+hden 3.477121
+sphere
+element helium abundance -1.000000
+element carbon abundance -3.522879
+element nitrogen abundance -4.000000
+element oxygen abundance -3.221849
+element neon abundance -3.823909
+element magnesium abundance -4.522879
+element silicon abundance -4.522879
+element sulphur abundance -4.823909
+element lithium off
+element beryllium off
+element boron off
+element fluorine off
+element sodium off
+element aluminium off
+element phosphorus off
+element chlorine off
+element argon off
+element potassium off
+element calcium off
+element scandium off
+element titanium off
+element vanadium off
+element chromium off
+element manganese off
+element iron off
+element cobalt off
+element nickel off
+element copper off
+element zinc off
+iterate
+stop temperature 1000
+stop efrac -2
+print line faint -6
+print lines column
+print lines sort wavelength
+save overview last "pn150.ovr"
+save cooling last "pn150.col"
+save heating last "pn150.het"
+save element carbon last "pn150.c"
+save element nitrogen last "pn150.n"
+save element oxygen last "pn150.o"
+save element neon last "pn150.ne"
+save element magnesium last "pn150.mg"
+save element silicon last "pn150.si"
+save element sulphur last "pn150.s"

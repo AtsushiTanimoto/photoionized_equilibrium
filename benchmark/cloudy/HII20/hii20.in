@@ -1,0 +1,49 @@
+title Lexington 2000 HII20
+blackbody 20000
+luminosity total 39.778513
+radius 18.477121
+hden 2.000000
+sphere
+element helium abundance -1.000000
+element carbon abundance -3.657577
+element nitrogen abundance -4.397940
+element oxygen abundance -3.481486
+element neon abundance -4.301030
+element sulphur abundance -5.045757
+element lithium off
+element beryllium off
+element boron off
+element fluorine off
+element sodium off
+element magnesium off
+element aluminium off
+element silicon off
+element phosphorus off
+element chlorine off
+element argon off
+element potassium off
+element calcium off
+element scandium off
+element titanium off
+element vanadium off
+element chromium off
+element manganese off
+element iron off
+element cobalt off
+element nickel off
+element copper off
+element zinc off
+iterate
+stop temperature 1000
+stop efrac -2
+print line faint -6
+print lines column
+print lines sort wavelength
+save overview last "hii20.ovr"
+save cooling last "hii20.col"
+save heating last "hii20.het"
+save element carbon last "hii20.c"
+save element nitrogen last "hii20.n"
+save element oxygen last "hii20.o"
+save element neon last "hii20.ne"
+save element sulphur last "hii20.s"

@@ -1,0 +1,49 @@
+title Lexington 2000 PN75
+blackbody 75000
+luminosity total 37.281715
+radius 17.176091 17.875061
+hden 2.698970
+sphere
+element helium abundance -1.000000
+element carbon abundance -3.698970
+element nitrogen abundance -4.221849
+element oxygen abundance -3.522879
+element neon abundance -4.221849
+element magnesium abundance -5.000000
+element silicon abundance -5.000000
+element sulphur abundance -5.000000
+element lithium off
+element beryllium off
+element boron off
+element fluorine off
+element sodium off
+element aluminium off
+element phosphorus off
+element chlorine off
+element argon off
+element potassium off
+element calcium off
+element scandium off
+element titanium off
+element vanadium off
+element chromium off
+element manganese off
+element iron off
+element cobalt off
+element nickel off
+element copper off
+element zinc off
+iterate
+print line faint -6
+print lines column
+print lines sort wavelength
+save overview last "pn75.ovr"
+save cooling last "pn75.col"
+save heating last "pn75.het"
+save element carbon last "pn75.c"
+save element nitrogen last "pn75.n"
+save element oxygen last "pn75.o"
+save element neon last "pn75.ne"
+save element magnesium last "pn75.mg"
+save element silicon last "pn75.si"
+save element sulphur last "pn75.s"

@@ -1,7 +1,8 @@
 """
 Lexington 2000 ベンチマーク (Ferland et al. 1995, Péquignot et al. 2001) を計算し、各コードの公表値と比較する。
   uv run python run_lexington.py --model HII40 [--n-cells 250] [--iterations 10] [--case B | --diffuse] [--plot-only]
-結果は output/<output>_results.tsv、図は figures/<output>.png (各量の中央値に対する比)。
+結果は output/<output>_results.tsv、図は figures/<output>.png (各量の中央値に対する比) と
+figures/<output>_vs_cloudy.png (run_cloudy.py の Cloudy C25 に対する比)。
 モデル (入力は lexington_reference.MODELS、Ercolano et al. 2003 の Table 1):
   HII40: 黒体 4×10⁴ K の標準 HII 領域、HII20: 2×10⁴ K の低励起 HII 領域、
   PN150: 1.5×10⁵ K の光学的に厚い惑星状星雲、PN75: 7.5×10⁴ K の光学的に薄い (外径 7.5×10¹⁷ cm で打ち切る) 惑星状星雲。
@@ -104,10 +105,24 @@ def save_results(results, model_name, output):
     return path
 
 
+def read_cloudy(model_name):
+    """run_cloudy.py の結果 (output/cloudy_<model>_results.tsv) を読む。なければ空の辞書"""
+    path = os.path.join(visualization.OUTPUT_DIR, f"cloudy_{model_name}_results.tsv")
+    values = {}
+    if os.path.exists(path):
+        with open(path) as f:
+            next(f)
+            for line in f:
+                name, value, _ = line.rstrip("\n").split("\t")
+                values[name] = float(value)
+    return values
+
+
 def plot_results(results, model_name, output, title=None):
     """
     各量の中央値に対する比 (対数軸) を図にして figures/<output>.png に保存する。
-    灰色の点は MOCASSIN 以外の各コード、記号は Cloudy (GF)、XSTAR (TK)、MOCASSIN 1-D (BE1D)、赤の丸が本コード。
+    灰色の点は MOCASSIN 以外の各コード、記号は Cloudy (GF)・XSTAR (TK) の 2001 年の値と、手元で同じ条件で計算した Cloudy C25
+    (run_cloudy.py の結果があれば)、赤の丸が本コード。
     灰色の帯は MOCASSIN 以外のコードの最小〜最大の範囲。
     """
     reference = lexington_reference.MODELS[model_name]
@@ -123,7 +138,7 @@ def plot_results(results, model_name, output, title=None):
         others = [v / median for code, v in zip(reference["columns"], reference["rows"][name]) if v is not None and not code.startswith("BE")]
         ax.plot([min(others), max(others)], [yy, yy], color="0.85", linewidth=8, solid_capstyle="round", zorder=1)
         ax.scatter(others, [yy] * len(others), color="0.55", s=12, zorder=2)
-    for code, marker, color, label in [("GF", "s", colors[2], "Cloudy"), ("TK", "^", colors[1], "XSTAR"), ("BE1D", "D", colors[3], "MOCASSIN (1-D)")]:
+    for code, marker, color, label in [("GF", "s", colors[2], "Cloudy (2001)"), ("TK", "^", colors[1], "XSTAR (2001)")]:
         xs, ys = [], []
         for yy, name in zip(y, names):
             v = lexington_reference.value(model_name, name, code)
@@ -132,7 +147,12 @@ def plot_results(results, model_name, output, title=None):
                 ys.append(yy)
         if xs:
             ax.scatter(xs, ys, marker=marker, facecolors="none", edgecolors=[color], s=50, linewidths=1.5, label=label, zorder=3)
-    ax.scatter([results[n] / lexington_reference.median(model_name, n) for n in names], y, color=colors[0], s=70, label="This code", zorder=4)
+    cloudy = read_cloudy(model_name)
+    if cloudy:
+        xs = [cloudy[n] / lexington_reference.median(model_name, n) for n in names if cloudy.get(n)]
+        ys = [yy for yy, n in zip(y, names) if cloudy.get(n)]
+        ax.scatter(xs, ys, marker="*", color=colors[3], s=130, label="Cloudy C25", zorder=4)
+    ax.scatter([results[n] / lexington_reference.median(model_name, n) for n in names], y, color=colors[0], s=70, label="This code", zorder=5)
     ax.axvline(1.0, color="0.3", linewidth=1)
     ax.set_xscale("log")
     ax.set_xlim(0.2, 5.0)
@@ -150,6 +170,39 @@ def plot_results(results, model_name, output, title=None):
     matplotlib.pyplot.tight_layout()
     os.makedirs(visualization.FIGURE_DIR, exist_ok=True)
     path = os.path.join(visualization.FIGURE_DIR, f"{output}.png")
+    matplotlib.pyplot.savefig(path, dpi=150)
+    matplotlib.pyplot.close(fig)
+    return path
+
+
+def plot_versus_cloudy(results, model_name, output, title=None):
+    """本コード / Cloudy C25 の比 (対数軸) を figures/<output>_vs_cloudy.png に保存する (Cloudy の結果がなければ None)"""
+    cloudy = read_cloudy(model_name)
+    names = [name for name in results if cloudy.get(name)]
+    if not names:
+        return None
+    y = numpy.arange(len(names))[::-1]
+    seaborn.set_theme()
+    seaborn.set_context("talk")
+    seaborn.set_style("ticks")
+    colors = seaborn.color_palette("hls", 4)
+    fig, ax = matplotlib.pyplot.subplots(figsize=(10, 0.42 * len(names) + 2.0))
+    ax.axvspan(0.9, 1.1, color="0.9", zorder=0)
+    ax.scatter([results[n] / cloudy[n] for n in names], y, color=colors[0], s=70, zorder=3)
+    ax.axvline(1.0, color="0.3", linewidth=1)
+    ax.set_xscale("log")
+    ax.set_xlim(0.2, 5.0)
+    ticks = [0.2, 0.3, 0.5, 0.7, 1.0, 1.5, 2.0, 3.0, 5.0]
+    ax.xaxis.set_major_locator(matplotlib.ticker.FixedLocator(ticks))
+    ax.xaxis.set_major_formatter(matplotlib.ticker.FixedFormatter([f"{t:g}" for t in ticks]))
+    ax.xaxis.set_minor_formatter(matplotlib.ticker.NullFormatter())
+    ax.set_yticks(y)
+    ax.set_yticklabels(names, fontsize="small")
+    ax.set_ylim(-0.7, len(names) - 0.3)
+    ax.set_xlabel("This code / Cloudy C25 (grey band: ±10%)")
+    ax.set_title(title or f"Lexington 2000 {model_name}")
+    matplotlib.pyplot.tight_layout()
+    path = os.path.join(visualization.FIGURE_DIR, f"{output}_vs_cloudy.png")
     matplotlib.pyplot.savefig(path, dpi=150)
     matplotlib.pyplot.close(fig)
     return path
@@ -227,7 +280,9 @@ if __name__ == "__main__":
         args.output = f"lexington_{args.model}" + ("_diffuse" if args.diffuse else "")
     mode = "diffuse field (outward-only), Case A" if args.diffuse else f"Case {args.case}"
     if args.plot_only:
-        print(plot_results(read_results(args.output), args.model, args.output, f"Lexington 2000 {args.model} ({mode})"))
+        results = read_results(args.output)
+        print(plot_results(results, args.model, args.output, f"Lexington 2000 {args.model} ({mode})"))
+        print(plot_versus_cloudy(results, args.model, args.output, f"Lexington 2000 {args.model} ({mode})"))
         sys.exit(0)
 
     time_start = time.time()
@@ -247,13 +302,16 @@ if __name__ == "__main__":
 
     print(save_results(results, args.model, args.output))
     print(plot_results(results, args.model, args.output, f"Lexington 2000 {args.model} ({mode})"))
+    print(plot_versus_cloudy(results, args.model, args.output, f"Lexington 2000 {args.model} ({mode})"))
     print(f"\nLexington {args.model} (this code: {mode}, {args.n_cells} cells, {model.global_iterations_done} global iterations)")
     print(f"  Hbeta in units of {reference['Hbeta_unit']:.0e} erg/s, R_out in {reference['R_out_unit']:.0e} cm, lines relative to Hbeta")
-    print(f"{'quantity':22s} {'This code':>10s} {'Median':>9s} {'Cloudy':>9s} {'XSTAR':>9s} {'MOCASSIN':>9s} {'This/Median':>11s}")
+    cloudy = read_cloudy(args.model)
+    print(f"{'quantity':22s} {'This code':>10s} {'Median':>9s} {'Cloudy01':>9s} {'XSTAR01':>9s} {'CloudyC25':>9s} {'This/Median':>11s} {'This/C25':>9s}")
     for name, value in results.items():
         median = lexington_reference.median(args.model, name)
         f = lambda v: f"{v:9.4g}" if v is not None else f"{'-':>9s}"
         ratio = f"{value / median:11.3f}" if median else f"{'-':>11s}"
         print(f"{name:22s} {value:10.4g} {f(median)} {f(lexington_reference.value(args.model, name, 'GF'))} "
-              f"{f(lexington_reference.value(args.model, name, 'TK'))} {f(lexington_reference.value(args.model, name, 'BE1D'))} {ratio}")
+              f"{f(lexington_reference.value(args.model, name, 'TK'))} {f(cloudy.get(name))} {ratio} "
+              f"{(value / cloudy[name]) if cloudy.get(name) else float('nan'):9.3f}")
     print(f"\nComputation time: {(time.time() - time_start) / 60.0:.2f} min")
