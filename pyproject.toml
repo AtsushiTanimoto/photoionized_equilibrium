@@ -1,8 +1,7 @@
 [project]
 name = "photoionized-equilibrium"
 version = "0.1.0"
-description = "Add your description here"
-readme = "README.md"
+description = "光電離プラズマの電離平衡 + 熱平衡のモンテカルロ計算 (MONACO 移植の試作)"
 authors = [
     { name = "Atsushi Tanimoto", email = "atsushi.tanimoto@ogu.ac.jp" }
 ]
@@ -15,9 +14,6 @@ dependencies = [
     "seaborn>=0.13.2",
 ]
 
-[project.scripts]
-photoionized-equilibrium = "photoionized_equilibrium:main"
-
-[build-system]
-requires = ["uv_build>=0.13.1,<0.14.0"]
-build-backend = "uv_build"
+[tool.uv]
+# パッケージとしてビルドしない (コードは source/ にフラットに置き、source/ 内から uv run python <script>.py で実行する)
+package = false

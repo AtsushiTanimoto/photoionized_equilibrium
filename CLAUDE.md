@@ -12,7 +12,7 @@ kT = 2.5 keV の黒体、log ξ = 3.5、n = 10⁹ cm⁻³、N_H = 10²¹ cm⁻²
 
 ## 実行方法
 
-ビルドシステム、テスト、リンタ、依存関係ファイルはない。必要なパッケージは numpy（`numpy.trapezoid` を使うため 2.0 以上）、scipy、astropy、matplotlib、seaborn。
+依存関係は uv で管理する（`pyproject.toml`、`uv.lock`、Python 3.15。パッケージの追加は `uv add`）。`[tool.uv] package = false` でパッケージとしてはビルドしないので `src/` は作らず、コードは `source/` に置く。スクリプトは `uv run python <script>.py` で実行する（以下の `python3` は `uv run python` と読み替える）。テスト、リンタはない。必要なパッケージは numpy（`numpy.trapezoid` を使うため 2.0 以上）、scipy、astropy、matplotlib、seaborn。
 
 原子データは外部データベースから import 時／`setup_grids()` 時に読む（`constants.py` のパス）:
 - FAC（`ATOMIC_DATA_DIR` = `/Users/tanimoto/software/database/atomic_data`、MONACO と同じ DB）: 光電離断面積 `<元素>/<元素><電子数>.pi`。電子数 ≤ 10 は `~/github/atomicdatabase` の全パイプライン（H, He, C, N, O, Ne は全段階）、電子数 > 10 は同リポジトリの `source/ground_photoionization.py`（基底配置と一電子電離の配置だけで FAC の RR を計算、1 イオン数秒〜数十秒。Mg, Si, S, Ar, Ca, Cr, Mn, Fe, Ni の電子数 ≥ 11、中性原子は除く）が同じディレクトリに置く。FAC データのない中性原子は EPICS2025 の表（`NEUTRAL_ABSORPTION_DIRS`、`~/github/neutral_matter/database/absorption/epics2025/pe-cs-<ZZ>.dat`、MeV と barn。閾値が実験値で、値は EPDL97 と同じ。なければ `~/software/database/neutral_matter/absorption/geant4_epdl97`。MONACO 既定の `xraylib_rtab` は 10 eV からしかなく閾値 < 10 eV の原子に使えない）を使う（FAC の中性原子は閾値付近で Verner の 1/100 など精度が悪い）。
