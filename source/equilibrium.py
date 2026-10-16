@@ -56,7 +56,7 @@ class PhotoionizationModel:
     def __init__(self, radius_edges, hydrogen_number_density, source,
                  elements=constants.BENCHMARK_ELEMENTS, abundances=constants.ABUNDANCES_ANGR,
                  T_gas=1e4, N_nu=2000, E_min_eV=None, E_max_eV=None,
-                 recombination_case="A", N_levels_max=None, auger=True):
+                 recombination_case="A", N_levels_max=None, auger=True, diffuse=False):
         """
         radius_edges:            半径セルの境界 [cm]（長さ N_r + 1、昇順）
         hydrogen_number_density: 全水素数密度 [cm^-3]（一様）
@@ -85,6 +85,9 @@ class PhotoionizationModel:
         self.recombination_case = recombination_case
         self.N_levels_max = N_levels_max
         self.auger = auger              # 内殻光電離に続く Auger 電離 (2 段電離と Auger 電子の加熱) を入れるか
+        self.diffuse = diffuse          # H, He の拡散光を外向き近似で輸送するか (True なら recombination_case は "A")
+        if diffuse and recombination_case != "A":
+            raise ValueError("diffuse=True では拡散光を陽に扱うので recombination_case='A' にする")
 
         # 原子データ
         self.elements = [atomic_data.get_element(symbol) for symbol in self.element_symbols]
@@ -188,6 +191,8 @@ class PhotoionizationModel:
                         dr_cooling[k] = 0.0
         self.alpha_RR_table = _log10_table(alpha_RR)
         self.alpha_DR_table = _log10_table(alpha_DR)
+        if self.diffuse:
+            self._setup_diffuse_tables(T, alpha_RR + alpha_DR)
         self.rr_cooling_table = _log10_table(rr_cooling)
         self.dr_cooling_table = _log10_table(dr_cooling)
         self.q_CI_table = _log10_table(q_CI)
@@ -198,6 +203,56 @@ class PhotoionizationModel:
         self.k_CX_rec_table = _log10_table(k_CX_rec)
         self.k_CX_ion_table = _log10_table(k_CX_ion)
         self.rate_tables_ready = True
+
+    # ------------------------------------------------------------------
+    # 拡散光 (外向き近似)
+    # ------------------------------------------------------------------
+    # 拡散光の成分: (再結合するイオン, 再結合でできるイオン, Case B の α の関数, 再結合線 [(エネルギー [eV], Case B 再結合 1 回あたりの光子数)])
+    #   基底状態への再結合連続光 (α_1 = α_A − α_B、Milne の関係の形) と、Case B の再結合のあとに出る H を電離できる線:
+    #   He I: 3/4 が三重項で 2³S → 1¹S の 19.82 eV、1/4 が一重項でそのうち 2/3 が 2¹P → 1¹S の 21.22 eV (残りは 2 光子、扱わない)。
+    #   He II: 2/3 が Lyα 40.81 eV (残り 1/3 は 2s からの 2 光子、扱わない)。
+    DIFFUSE_COMPONENTS = [("H00", "H01", recombination.HI_alphaB, []),
+                          ("He01", "He02", recombination.HeI_alphaB, [(19.82, 0.75), (21.22, 0.25 * 2.0 / 3.0)]),
+                          ("He00", "He01", recombination.HeII_alphaB, [(40.81, 2.0 / 3.0)])]
+
+    def _setup_diffuse_tables(self, T, alpha_A):
+        """拡散光の成分ごとに、基底状態への再結合係数 α_1 = α_A − α_B と Case B の α_B を温度表にする"""
+        self.diffuse_components = []
+        for upper_symbol, lower_symbol, alpha_B_function, lines in self.DIFFUSE_COMPONENTS:
+            if upper_symbol not in self.ion_symbols or lower_symbol not in self.ion_symbols:
+                continue
+            k_upper = self.ion_symbols.index(upper_symbol)
+            k_lower = self.ion_symbols.index(lower_symbol)
+            alpha_B = alpha_B_function(T)
+            alpha_1 = numpy.maximum(alpha_A[k_upper] - alpha_B, 0.0)
+            line_bins = [(int(numpy.searchsorted(self.E_edges, E) - 1), n) for E, n in lines if self.E_edges[0] < E < self.E_edges[-1]]
+            self.diffuse_components.append({"upper": k_upper, "lower": k_lower, "ip_eV": self.ions[k_lower].ip_eV,
+                                            "alpha_1": _log10_table(alpha_1[None, :]), "alpha_B": _log10_table(alpha_B[None, :]), "lines": line_bins})
+
+    def _diffuse_emission(self, T, n_e, n_ion):
+        """
+        温度 T、電子密度 n_e、イオン密度 n_ion のセルの拡散光の放出率 [photons s^-1 cm^-3] (エネルギービンごと)。
+        再結合連続光の形は Milne の関係 j(E) ∝ σ(E) E² exp(−(E − I)/kT) (E ≥ I) をビン幅で積分し、合計が n_e n_ion α_1 になるよう規格化する。
+        """
+        emission = numpy.zeros(self.N_nu)
+        kT_eV = k_B * T / eV
+        dE = numpy.diff(self.E_edges)
+        for component in self.diffuse_components:
+            n_upper = n_ion[component["upper"]]
+            if n_upper <= 0.0:
+                continue
+            rate_1 = n_e * n_upper * _interpolate_log_table(T, component["alpha_1"])[0]
+            if rate_1 > 0.0:
+                shape = self.sigma_matrix[component["lower"]] * self.E_eV**2 \
+                    * numpy.exp(-numpy.minimum((self.E_eV - component["ip_eV"]) / kT_eV, 700.0)) * dE
+                shape[self.E_eV < component["ip_eV"]] = 0.0
+                total = numpy.sum(shape)
+                if total > 0.0:
+                    emission += rate_1 * shape / total
+            rate_B = n_e * n_upper * _interpolate_log_table(T, component["alpha_B"])[0]
+            for k, photons_per_recombination in component["lines"]:
+                emission[k] += rate_B * photons_per_recombination
+        return emission
 
     def rates_at(self, T):
         """温度 T での全イオンの (α_RR, α_DR, Λ_RR/(n_e n), Λ_DR/(n_e n), q_CI)"""
@@ -382,6 +437,12 @@ class PhotoionizationModel:
                     tau = (n_ion @ self.sigma_matrix) * dr
                     phi = numpy.where(tau > 1e-8, -numpy.expm1(-numpy.minimum(tau, 700.0)) / numpy.maximum(tau, 1e-300), 1.0 - 0.5 * tau)
                     c_E = base * phi                              # 局所の光子フラックス（ビンごと）[cm^-2 s^-1]
+                    if self.diffuse:
+                        # このセル自身の拡散光: 一様に放出され外向きに平均 dr/2 進む (パスレングス推定 emission × dr/2 × φ(τ/2))
+                        diffuse_emission = self._diffuse_emission(T_loc, n_e, n_ion)
+                        tau_half = 0.5 * tau
+                        phi_half = numpy.where(tau_half > 1e-8, -numpy.expm1(-numpy.minimum(tau_half, 700.0)) / numpy.maximum(tau_half, 1e-300), 1.0 - 0.5 * tau_half)
+                        c_E = c_E + diffuse_emission * 0.5 * dr * phi_half
 
                     # 光電離率 [s^-1] と加熱率 [erg s^-1 cm^-3]
                     Gamma = self.sigma_matrix @ c_E
@@ -451,6 +512,10 @@ class PhotoionizationModel:
                 # パケットの重みを全光学的厚みで減衰させる
                 tau_final = (n_ion @ self.sigma_matrix) * dr
                 W = W * numpy.exp(-numpy.minimum(tau_final, 700.0))
+                if self.diffuse:
+                    # このセルの拡散光を外向きのビームに加える (セル内で平均 τ/2 だけ減衰したもの。重みの単位は Q_p)
+                    emission = self._diffuse_emission(T_loc, n_e, n_ion)
+                    W = W + emission * V[i] / Q_p * numpy.exp(-numpy.minimum(0.5 * tau_final, 700.0))
 
                 if i % progress_interval == 0 or i == self.N_r - 1:
                     elapsed = time.time() - time_start_iter
