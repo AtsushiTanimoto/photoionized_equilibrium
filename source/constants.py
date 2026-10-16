@@ -3,7 +3,7 @@
 """
 
 # --- 制動放射 ---
-Lambda_ff_0 = 1.42e-27  # 制動放射冷却係数 [erg cm^3 s^-1 K^-0.5] (物理定数は各モジュールで astropy.constants を直接使う)
+Lambda_ff_0 = 1.426e-27  # 制動放射冷却係数 [erg cm^3 s^-1 K^-0.5] = (32π e⁶ / 3 h m_e c³) √(2π k / 3 m_e)。Λ = Λ_ff_0 √T Σ Z² ⟨g_ff⟩ n_e n_ion
 
 import os
 
@@ -22,6 +22,8 @@ NEUTRAL_ABSORPTION_DIRS = ["/Users/tanimoto/github/neutral_matter/database/absor
                            "/Users/tanimoto/software/database/neutral_matter/absorption/geant4_epdl97"]
 # H 原子との電荷交換の係数 (Kingdon & Ferland 1996 のフィット、Cloudy のデータファイルの写し) はこのリポジトリの database/charge_exchange に同梱
 CHARGE_EXCHANGE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "database", "charge_exchange")
+# 周波数積分した制動放射の Gaunt 因子 (van Hoof et al. 2015、Z = 1〜30) はこのリポジトリの database/gaunt_ff に同梱
+GAUNT_FF_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "database", "gaunt_ff")
 
 # --- 元素 ---
 ELEMENT_SYMBOLS = [

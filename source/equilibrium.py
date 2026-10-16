@@ -182,6 +182,10 @@ class PhotoionizationModel:
         self.rr_cooling_table = _log10_table(rr_cooling)
         self.dr_cooling_table = _log10_table(dr_cooling)
         self.q_CI_table = _log10_table(q_CI)
+        # 制動放射: イオンごとの Z² ⟨g_ff⟩(Z, T) (Z はイオンの電荷、中性は 0)。Λ_ff = Λ_ff_0 √T n_e Σ n_ion Z² ⟨g_ff⟩
+        brems = numpy.array([ion.charge**2 * bremsstrahlung.total_gaunt_factor(ion.charge, T) if ion.charge > 0 else numpy.zeros_like(T)
+                             for ion in self.ions])
+        self.brems_table = _log10_table(brems)
         self.k_CX_rec_table = _log10_table(k_CX_rec)
         self.k_CX_ion_table = _log10_table(k_CX_ion)
         self.rate_tables_ready = True
@@ -351,8 +355,6 @@ class PhotoionizationModel:
                     else:
                         # --- 熱収支から温度を求める ---
                         line_table = self.line_cooling.table(n_e, n_HI, x_loc)
-                        charge2 = self.ion_charge**2
-
                         def cooling_terms(T):
                             alpha_RR, alpha_DR, rr_cooling, dr_cooling, q_CI = self.rates_at(T)
                             kT = k_B * T
@@ -361,7 +363,7 @@ class PhotoionizationModel:
                                 "recombination_RR": numpy.sum(n_e * n_ion * rr_cooling),
                                 "recombination_DR": numpy.sum(n_e * n_ion * dr_cooling),
                                 "collisional_ionization": numpy.sum(n_e * n_ion * q_CI * self.ion_ip_erg),
-                                "bremsstrahlung": constants.Lambda_ff_0 * bremsstrahlung.g_ff(T) * numpy.sqrt(T) * n_e * numpy.sum(charge2 * n_ion),
+                                "bremsstrahlung": constants.Lambda_ff_0 * numpy.sqrt(T) * n_e * numpy.sum(n_ion * _interpolate_log_table(T, self.brems_table)),
                                 "compton": cooling_compton_per_kT * kT,
                             }
                             return terms

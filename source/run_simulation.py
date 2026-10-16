@@ -1,6 +1,8 @@
 """
-HII 領域モデル（黒体星に照らされた一様密度ガス球、H + He + C + N + O + Ne）の光電離平衡計算のメインスクリプト
+HII 領域モデル（黒体星に照らされた一様密度ガス球、元素は constants.HII_REGION_ELEMENTS）の光電離平衡計算のメインスクリプト
+  uv run python run_simulation.py [--elements H,He] [--output hii_region]
 """
+import argparse
 import astropy.constants
 import astropy.units
 import numpy
@@ -16,6 +18,12 @@ pc = astropy.constants.pc.cgs.value  # パーセク [cm]
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--elements", default=",".join(constants.HII_REGION_ELEMENTS), help="元素記号をカンマ区切り")
+    parser.add_argument("--output", default="hii_region", help="output/<output>.tsv などの名前")
+    parser.add_argument("--case", default="B", choices=["A", "B"], help="H, He の再結合 (B: 拡散光子がその場で吸収される近似)")
+    args = parser.parse_args()
+    elements = [symbol.strip() for symbol in args.elements.split(",")]
     time_start = time.time()
     radius_edges            = numpy.linspace(0.0, 1.0, 101) * pc      # セル境界 [cm]
     radius_edges[0]         = 1.0e-3 * pc                             # 中心は特異点なので小さくずらす
@@ -24,18 +32,18 @@ if __name__ == "__main__":
 
     model = equilibrium.PhotoionizationModel(
         radius_edges=radius_edges, hydrogen_number_density=hydrogen_number_density, source=light_source,
-        elements=constants.HII_REGION_ELEMENTS,
-        abundances={symbol: constants.ABUNDANCES_ANGR[symbol] for symbol in constants.HII_REGION_ELEMENTS},   # 太陽組成 angr (XSTAR と同じ)
+        elements=elements,
+        abundances={symbol: constants.ABUNDANCES_ANGR[symbol] for symbol in elements},   # 太陽組成 angr (XSTAR と同じ)
         T_gas=1e4,                  # ガスの初期温度 [K]
         N_nu=1001,                  # エネルギービン数
-        recombination_case="B")     # H, He は Case B
+        recombination_case=args.case)   # H, He は既定で Case B
     model.setup_grids()
     model.calculate_equilibrium(N_packets=200000, max_global_iterations=1, max_local_iterations=100)
     # 図は benchmark/compare_hii_region.py (XSTAR との比較図) で描く。本コードだけの図が必要なら
     # cd source && python3 visualization.py --file ../output/hii_region.tsv --radial
     print("Saving results to TSV...", flush=True)
-    print(model.save_tsv("hii_region.tsv"))
-    print(model.save_heating_cooling_tsv("hii_region_heating_cooling.tsv"))
-    print(model.save_level_population_tsv("hii_region_level_populations"))
+    print(model.save_tsv(f"{args.output}.tsv"))
+    print(model.save_heating_cooling_tsv(f"{args.output}_heating_cooling.tsv"))
+    print(model.save_level_population_tsv(f"{args.output}_level_populations"))
     print("Done.", flush=True)
     print(f"Computation time: {(time.time() - time_start) / 60.0:.3e} min", flush=True)
