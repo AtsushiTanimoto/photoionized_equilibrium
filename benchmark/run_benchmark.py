@@ -27,7 +27,7 @@ if __name__ == "__main__":
     parser.add_argument("--n-cells", type=int, default=2)
     parser.add_argument("--n-packets", type=int, default=200000)
     parser.add_argument("--n-energy", type=int, default=2000)
-    parser.add_argument("--iterations", type=int, default=3)
+    parser.add_argument("--iterations", type=int, default=10, help="グローバル反復の最大回数 (収束したらそこで終える)")
     parser.add_argument("--elements", default=",".join(constants.BENCHMARK_ELEMENTS))
     parser.add_argument("--T-init", type=float, default=1.0e6)
     parser.add_argument("--fix-temperature", type=float, default=None, help="熱収支を解かず、この温度 [K] で電離平衡だけを解く（収支の診断用）")

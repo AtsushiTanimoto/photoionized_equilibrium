@@ -21,6 +21,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--elements", default=",".join(constants.HII_REGION_ELEMENTS), help="元素記号をカンマ区切り")
     parser.add_argument("--output", default="hii_region", help="output/<output>.tsv などの名前")
+    parser.add_argument("--iterations", type=int, default=10, help="グローバル反復の最大回数 (収束したらそこで終える)")
+    parser.add_argument("--n-energy", type=int, default=1001, help="エネルギービン数")
     parser.add_argument("--case", default="B", choices=["A", "B"], help="H, He の再結合 (B: 拡散光子がその場で吸収される近似)")
     args = parser.parse_args()
     elements = [symbol.strip() for symbol in args.elements.split(",")]
@@ -35,10 +37,10 @@ if __name__ == "__main__":
         elements=elements,
         abundances={symbol: constants.ABUNDANCES_ANGR[symbol] for symbol in elements},   # 太陽組成 angr (XSTAR と同じ)
         T_gas=1e4,                  # ガスの初期温度 [K]
-        N_nu=1001,                  # エネルギービン数
+        N_nu=args.n_energy,         # エネルギービン数
         recombination_case=args.case)   # H, He は既定で Case B
     model.setup_grids()
-    model.calculate_equilibrium(N_packets=200000, max_global_iterations=1, max_local_iterations=100)
+    model.calculate_equilibrium(N_packets=200000, max_global_iterations=args.iterations, max_local_iterations=100)
     # 図は benchmark/compare_hii_region.py (XSTAR との比較図) で描く。本コードだけの図が必要なら
     # cd source && python3 visualization.py --file ../output/hii_region.tsv --radial
     print("Saving results to TSV...", flush=True)

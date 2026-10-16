@@ -302,9 +302,20 @@ class PhotoionizationModel:
     # ------------------------------------------------------------------
     def calculate_equilibrium(self, max_global_iterations=5, N_packets=200000, max_local_iterations=100,
                               relaxation=0.5, seed=0, fraction_tolerance=1e-4, temperature_tolerance=1e-3,
-                              fixed_temperature=None):
+                              fixed_temperature=None, min_global_iterations=2,
+                              global_fraction_tolerance=1e-3, global_temperature_tolerance=1e-3, average_estimators=True):
         """
         モンテカルロ法（連続吸収法）で光電離平衡を計算する。
+        反復の終了条件:
+          グローバル反復 (パケットを内側から外側へ 1 回伝搬させる単位): 前回からの変化の全セル平均
+            (各セルでイオン割合の変化の最大値 (絶対値) と温度の相対変化をとり、セルについて平均する) が
+            イオン割合 < global_fraction_tolerance かつ 温度 < global_temperature_tolerance になったら終える
+            (ただし最低 min_global_iterations 回は回す。1 回目は初期値からの変化なので判定しない)。
+            満たさなければ max_global_iterations 回で終える。電離境界など一部のセルの揺らぎで判定が決まらないよう平均をとる。
+          モンテカルロの統計誤差を減らすため、各セルに入射するパケットの重み (ビンごと) を反復を通して平均し、
+          その平均から局所の光子フラックスを求める (average_estimators=True。反復 n 回で実効パケット数が n 倍になる)。
+          セル内の局所反復: イオン割合の変化 < fraction_tolerance かつ 温度の相対変化 < temperature_tolerance で終える
+            (max_local_iterations 回で打ち切り)。
         fixed_temperature を与えると熱収支は解かず、その温度で電離平衡だけを解く
         （加熱・冷却の内訳は保存されるので、XSTAR などの温度での収支の診断に使える）。
 
@@ -326,10 +337,14 @@ class PhotoionizationModel:
               f"Q({self.E_edges[0]:.2f}-{self.E_edges[-1]:.3e} eV) = {self.Q_tot:.3e} s^-1", flush=True)
         progress_interval = max(self.N_r // 20, 1)
 
+        self.global_converged = False
+        self.global_iterations_done = 0
         for global_it in range(max_global_iterations):
             previous_fractions = [fraction.copy() for fraction in self.fraction_array]
             previous_T = self.temperature_array.copy()
             W = self.source.sample_packet_counts(self.Q_bin, N_packets, rng)   # ビンごとのパケット数（重み 1）
+            if global_it == 0:
+                W_in_sum = numpy.zeros((self.N_r, self.N_nu))   # 各セルに入射したパケットの重みの和 (反復について)
             N_unconverged_cells = 0
             time_start_iter = time.time()
             print(f"Iteration {global_it + 1:2d}/{max_global_iterations}: propagating packets...", flush=True)
@@ -338,7 +353,9 @@ class PhotoionizationModel:
                 x_loc = self._ion_fraction_vector(i)
                 T_loc = self.temperature_array[i]
                 dr = self.dr_cm[i]
-                base = Q_p * W * dr / V[i]    # [cm^-2 s^-1] (φ をかける前)
+                W_in_sum[i] += W
+                W_in = W_in_sum[i] / (global_it + 1) if average_estimators else W   # 入射するパケットの重み (反復平均)
+                base = Q_p * W_in * dr / V[i]    # [cm^-2 s^-1] (φ をかける前)
                 local_converged = False
                 last_local_it = 0
 
@@ -442,11 +459,23 @@ class PhotoionizationModel:
                           f"{self._dominant_ions_string(i)} | local its = {last_local_it + 1:3d}, "
                           f"remaining packets = {numpy.sum(W) / N_packets:.3f} | elapsed {elapsed / 60.0:.2f} min, ETA {eta / 60.0:.2f} min", flush=True)
 
-            max_diff = max(numpy.max(numpy.abs(f - p)) for f, p in zip(self.fraction_array, previous_fractions))
-            max_diff_T = numpy.max(numpy.abs(self.temperature_array - previous_T) / previous_T)
-            print(f"Iteration {global_it + 1:2d}/{max_global_iterations}: max change in fractions = {max_diff:.2e}, "
-                  f"in T = {max_diff_T:.2e}, cells hitting local iteration limit ({max_local_iterations}) = {N_unconverged_cells}  "
+            diff_cell = numpy.max([numpy.max(numpy.abs(f - p), axis=1) for f, p in zip(self.fraction_array, previous_fractions)], axis=0)
+            diff_T_cell = numpy.abs(self.temperature_array - previous_T) / previous_T
+            max_diff, max_diff_T = numpy.max(diff_cell), numpy.max(diff_T_cell)
+            mean_diff, mean_diff_T = numpy.mean(diff_cell), numpy.mean(diff_T_cell)
+            print(f"Iteration {global_it + 1:2d}/{max_global_iterations}: change in fractions mean {mean_diff:.2e} (max {max_diff:.2e}), "
+                  f"in T mean {mean_diff_T:.2e} (max {max_diff_T:.2e}), cells hitting local iteration limit ({max_local_iterations}) = {N_unconverged_cells}  "
                   f"(elapsed time: {(time.time() - time_start_total) / 60.0:.3e} min)", flush=True)
+            self.global_iterations_done = global_it + 1
+            self.global_converged = (global_it + 1 >= min_global_iterations and mean_diff < global_fraction_tolerance
+                                     and mean_diff_T < global_temperature_tolerance)
+            if self.global_converged:
+                print(f"Converged after {global_it + 1} global iterations (mean change: fractions < {global_fraction_tolerance:.1e}, "
+                      f"T < {global_temperature_tolerance:.1e})", flush=True)
+                break
+        if not self.global_converged:
+            print(f"Not converged within {max_global_iterations} global iterations "
+                  f"(mean change: fractions < {global_fraction_tolerance:.1e}, T < {global_temperature_tolerance:.1e} not reached)", flush=True)
 
     def _solve_thermal_balance(self, residual, T_current):
         """
