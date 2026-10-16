@@ -23,6 +23,26 @@ ELEMENTS = ["h", "he", "li", "be", "b", "c", "n", "o", "f", "ne", "na", "mg", "a
 
 BBODY_TABLE_CUTOFF = 60.0     # E/kT がこれを超える点は 0 にする (exp(-60) ≈ 1e-26)
 BBODY_TABLE_FILE = "bbody.dat"
+DISKBB_TABLE_FILE = "diskbb.dat"
+
+
+def write_diskbb_table(path, T_in, E_min=0.1, E_max=1.0e6, n_points=5000):
+    """
+    標準円盤の多温度黒体 (source.DiskBlackbodySource と同じ形。規格化は XSTAR が rlrad38 で行う) を
+    XSTAR の spectrum=file 用の表に書く (本コードと XSTAR に同じスペクトルを与えるため)。範囲外は 0。
+    """
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "source"))
+    import source
+    disk = source.DiskBlackbodySource(T_in=T_in, r_in_cm=1.0)
+    E = numpy.geomspace(E_min, E_max, n_points)
+    F = disk.luminosity_density(E)
+    F /= numpy.max(F)
+    with open(path, "w") as f:
+        f.write(f"{len(E)}\n")
+        for e, y in zip(E, F):
+            f.write(f"{e:.6e} {y:.6e}\n")
+    return path
 
 
 def write_bbody_table(path, T_BB, E_min=0.1, E_max=1.0e6, n_points=5000, E_zero_below=None, E_zero_range=None):
@@ -91,6 +111,7 @@ if __name__ == "__main__":
     parser.add_argument("--bbody-table", action="store_true", help="内蔵 bbody の代わりに Planck 関数の表を spectrum=file で渡す（高エネルギーの床を避ける）")
     parser.add_argument("--bbody-zero-below", type=float, default=None, help="--bbody-table の表でこのエネルギー [eV] より下を 0 にする（診断用）")
     parser.add_argument("--bbody-zero-range", default=None, help="--bbody-table の表でこの範囲 [eV] を 0 にする。例: 10.0,10.4（診断用）")
+    parser.add_argument("--diskbb-table", action="store_true", help="標準円盤の多温度黒体 (内縁温度 --trad) の表を spectrum=file で渡す")
     parser.add_argument("--xeemin", type=float, default=1.0e-2, help="XSTAR の電子割合の下限 xeemin")
     parser.add_argument("--cfrac", type=float, default=0.0, help="XSTAR の covering fraction cfrac（1 にすると ucalc の線の連続光ポンピング ans2 が 0 になる）")
     args = parser.parse_args()
@@ -100,7 +121,10 @@ if __name__ == "__main__":
     if args.abundances:
         abundances = {item.split("=")[0]: float(item.split("=")[1]) for item in args.abundances.split(",")}
     spectrum_file = None
-    if args.bbody_table:
+    if args.diskbb_table:
+        spectrum_file = DISKBB_TABLE_FILE
+        write_diskbb_table(os.path.join(directory, spectrum_file), args.trad)
+    elif args.bbody_table:
         spectrum_file = BBODY_TABLE_FILE
         zero_range = tuple(float(v) for v in args.bbody_zero_range.split(",")) if args.bbody_zero_range else None
         write_bbody_table(os.path.join(directory, spectrum_file), args.trad, E_zero_below=args.bbody_zero_below, E_zero_range=zero_range)

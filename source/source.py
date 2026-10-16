@@ -93,6 +93,52 @@ class BlackbodySource(Source):
         return self._normalization * B_E
 
 
+class DiskBlackbodySource(Source):
+    """
+    標準降着円盤の多温度黒体 (XSPEC の diskbb と同じスペクトル形): 温度分布 T(r) = T_in (r / r_in)^(-3/4)、
+    両面から放射する光度
+      L_E = 2 ∫ 2π r dr π B_E(T(r)) = 4π² r_in² (4/3) ∫_{t_out}^{1} t^(-11/3) B_E(t T_in) dt,  t = T/T_in = (r/r_in)^(-3/4)
+    （等方に放射するとみなした全光度。円盤の傾きによる見かけの明るさの違いは考えない）。
+      r_in_cm を与えると上の式そのまま、luminosity を与えると band [eV] 内の光度が luminosity [erg s^-1] になるよう規格化する
+      （BlackbodySource と同じ。既定の band は 1-1000 Ry）。
+      r_out_over_r_in: 外縁半径 / 内縁半径 (diskbb は無限大。既定 10^4 で低エネルギー側の E^(1/3) の範囲が kT_in の 10^-3 倍まで伸びる)
+    スペクトルは対数エネルギーの表 (N_E 点) にしてから log-log で内挿する。
+    """
+    def __init__(self, T_in, r_in_cm=None, luminosity=None, band_eV=(13.6, 13600.0), r_out_over_r_in=1.0e4, N_E=2000, N_t=400):
+        if r_in_cm is None and luminosity is None:
+            raise ValueError("Give either r_in_cm or luminosity")
+        self.T_in = T_in
+        self.kT_in_eV = k_B * T_in / eV
+        self.r_in_cm = r_in_cm
+        self.luminosity = luminosity
+        self.band_eV = band_eV
+        self.r_out_over_r_in = r_out_over_r_in
+        t_out = r_out_over_r_in**(-0.75)
+        self.E_min_eV = 1.0e-3 * t_out * self.kT_in_eV
+        self.E_max_eV = 40.0 * self.kT_in_eV   # 最も熱い内縁の exp(-40) まで
+        # 規格化前の形 ∫ t^(-11/3) B_E(t T_in) dt を表にする (t は対数グリッド、dt = t d ln t)
+        self._log_E = numpy.linspace(numpy.log(self.E_min_eV), numpy.log(self.E_max_eV), N_E)
+        E = numpy.exp(self._log_E)[:, None]
+        t = numpy.geomspace(t_out, 1.0, N_t)[None, :]
+        x = numpy.minimum(E / (t * self.kT_in_eV), 700.0)
+        B_E = 2.0 * (E * eV)**3 / (h**3 * c**2) / numpy.expm1(x) * eV        # [erg s^-1 cm^-2 sr^-1 eV^-1]
+        shape = numpy.trapezoid(t**(-11.0 / 3.0) * B_E * t, numpy.log(t), axis=1)
+        self._log_shape = numpy.log(numpy.maximum(shape, 1e-300))
+        self._normalization = 1.0
+        if luminosity is not None:
+            self._normalization = luminosity / self.luminosity_in_band(*band_eV)
+        else:
+            self._normalization = 4.0 * numpy.pi**2 * r_in_cm**2 * (4.0 / 3.0)
+
+    def luminosity_density(self, E_eV):
+        """L_E [erg s^-1 eV^-1]（表の範囲外は 0）"""
+        E_eV = numpy.asarray(E_eV, dtype=float)
+        inside = (E_eV >= self.E_min_eV) & (E_eV <= self.E_max_eV)
+        L = numpy.zeros_like(E_eV)
+        L[inside] = self._normalization * numpy.exp(numpy.interp(numpy.log(E_eV[inside]), self._log_E, self._log_shape))
+        return L
+
+
 class TabulatedSource(Source):
     """表で与えた光源スペクトル (E [eV] 昇順、L_E [erg s^-1 eV^-1])。範囲外は 0。対数-対数で線形内挿する。"""
     def __init__(self, E_eV, L_E):

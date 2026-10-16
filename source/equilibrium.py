@@ -56,7 +56,7 @@ class PhotoionizationModel:
     def __init__(self, radius_edges, hydrogen_number_density, source,
                  elements=constants.BENCHMARK_ELEMENTS, abundances=constants.ABUNDANCES_ANGR,
                  T_gas=1e4, N_nu=2000, E_min_eV=None, E_max_eV=None,
-                 recombination_case="A", N_levels_max=None):
+                 recombination_case="A", N_levels_max=None, auger=True):
         """
         radius_edges:            半径セルの境界 [cm]（長さ N_r + 1、昇順）
         hydrogen_number_density: 全水素数密度 [cm^-3]（一様）
@@ -84,6 +84,7 @@ class PhotoionizationModel:
         self.E_max_eV = E_max_eV
         self.recombination_case = recombination_case
         self.N_levels_max = N_levels_max
+        self.auger = auger              # 内殻光電離に続く Auger 電離 (2 段電離と Auger 電子の加熱) を入れるか
 
         # 原子データ
         self.elements = [atomic_data.get_element(symbol) for symbol in self.element_symbols]
@@ -135,6 +136,14 @@ class PhotoionizationModel:
         # 光電離断面積 σ [cm^2] と加熱断面積 Σ σ_k (E - I_k) [erg cm^2] の行列 (N_ions, N_nu)
         self.sigma_matrix = numpy.array([ion.photoionization_cross_section(self.E_eV) for ion in self.ions])
         self.heating_matrix = numpy.array([ion.photoionization_heating_cross_section(self.E_eV) for ion in self.ions])
+        # Auger 電離を伴う (2 段上に電離する) 分の断面積 [cm^2] (auger=False なら 0、加熱も光電子の分だけにする)
+        self.auger_matrix = numpy.array([ion.auger_cross_section(self.E_eV) for ion in self.ions])
+        if not self.auger:
+            self.auger_matrix[:] = 0.0
+            for k, ion in enumerate(self.ions):
+                if ion.channels is not None:
+                    no_auger = [(I, S0, G, t, 0.0, 0.0) for I, S0, G, t, P_A, E_A in ion.channels]
+                    self.heating_matrix[k] = atomic_data.photoionization_heating_cross_section(self.E_eV, no_auger)
 
         # Compton 散乱: 1 回の散乱で電子が得る平均エネルギー E^2/(m_e c^2) (1 - 21E/(5 m_e c^2)) と失うエネルギー 4kT E/(m_e c^2)
         x = self.E_eV / m_e_c2_eV
@@ -222,25 +231,38 @@ class PhotoionizationModel:
             self.fraction_array[e][i, :] = 0.0
             self.fraction_array[e][i, element.min_charge:] = x[k:k + n]
 
-    def _solve_ionization_balance(self, up_rates, down_rates):
+    def _solve_ionization_balance(self, up_rates, down_rates, up2_rates=None):
         """
-        隣接する電離状態間のバランスから各電離状態の割合を計算する。
-          up_rates[j]:   電荷 j → j+1 の電離率 [s^-1] (光電離 + 衝突電離)
-          down_rates[j]: 電荷 j+1 → j の再結合率 [s^-1] (n_e α)
+        電離平衡から各電離状態の割合を計算する。
+          up_rates[j]:   電荷 j → j+1 の電離率 [s^-1] (光電離のうち 1 段だけの分 + 衝突電離 + 電荷交換)
+          down_rates[j]: 電荷 j+1 → j の再結合率 [s^-1] (n_e α + 電荷交換)
+          up2_rates[j]:  電荷 j → j+2 の電離率 [s^-1] (内殻光電離に続く Auger 電離。None なら 0)
         戻り値: [x_0, ..., x_N] (N = len(up_rates))
-        電離率がゼロなら低電離側に、再結合率がゼロなら高電離側に偏る。オーバーフローを避けるため対数で扱う。
+        再結合は 1 段ずつなので、電荷 j と j+1 の境界をまたぐ流束のつり合い
+          x_{j+1} down_j = x_j (up_j + up2_j) + x_{j-1} up2_{j-1}
+        から下から順に厳密に求まる (行列を解かない)。オーバーフローを避けるため対数で扱う。
+        電離率がゼロなら低電離側に、再結合率がゼロなら高電離側に偏る。
         """
         N = len(up_rates)
-        log_x = numpy.zeros(N + 1)
+        if up2_rates is None:
+            up2_rates = numpy.zeros(N)
+        log_x = numpy.full(N + 1, -numpy.inf)
+        log_x[0] = 0.0
+        with numpy.errstate(divide="ignore"):
+            log_up = numpy.log(numpy.asarray(up_rates, dtype=float) + numpy.asarray(up2_rates, dtype=float))
+            log_up2 = numpy.log(numpy.asarray(up2_rates, dtype=float))
+            log_down = numpy.log(numpy.asarray(down_rates, dtype=float))
         for j in range(N):
-            if up_rates[j] <= 0.0:
-                log_x[j + 1:] = -numpy.inf
-                break
-            if down_rates[j] <= 0.0:
-                log_x[:j + 1] = -numpy.inf
+            flux = log_x[j] + log_up[j]
+            if j > 0:
+                flux = numpy.logaddexp(flux, log_x[j - 1] + log_up2[j - 1])
+            if not numpy.isfinite(flux):
+                break                                   # これより上には電離しない
+            if not numpy.isfinite(log_down[j]):
+                log_x[:j + 1] = -numpy.inf              # 再結合しない: これより下は空になる
                 log_x[j + 1] = 0.0
                 continue
-            log_x[j + 1] = log_x[j] + numpy.log(up_rates[j]) - numpy.log(down_rates[j])
+            log_x[j + 1] = flux - log_down[j]
         log_x -= numpy.max(log_x)
         x = numpy.exp(log_x)
         return x / numpy.sum(x)
@@ -251,23 +273,28 @@ class PhotoionizationModel:
         n_HII = n_ion[self.ion_symbols.index("H00")] if "H00" in self.ion_symbols else 0.0
         return n_HI, n_HII
 
-    def _solve_all_elements(self, Gamma, n_e, T, n_HI=0.0, n_HII=0.0):
+    def _solve_all_elements(self, Gamma, n_e, T, n_HI=0.0, n_HII=0.0, Gamma_auger=None):
         """
         全元素の電離平衡を解いて、全イオンの割合（ion_list の順）を返す。
-        上向き: 光電離 Γ + 衝突電離 n_e q_CI + H II との電荷交換 n_HII k_CX_ion、
+        上向き 1 段: 光電離 (Γ − Γ_Auger) + 衝突電離 n_e q_CI + H II との電荷交換 n_HII k_CX_ion、
+        上向き 2 段: 内殻光電離に続く Auger 電離 Γ_Auger (Gamma_auger が None なら 0)、
         下向き: 再結合 n_e (α_RR + α_DR) + H I との電荷交換 n_HI k_CX_rec。
         電荷交換の H の密度は呼び出し側が直前の電離状態から渡す (局所反復で自己無撞着になる)。
         """
         alpha_RR, alpha_DR, _, _, q_CI = self.rates_at(T)
         k_CX_rec, k_CX_ion = self.charge_exchange_rates_at(T)
         alpha = alpha_RR + alpha_DR
+        if Gamma_auger is None:
+            Gamma_auger = numpy.zeros_like(Gamma)
         x = numpy.empty(self.N_ions)
         for e, element in enumerate(self.elements):
             k = self.ion_offset[e]
             n = element.Z + 1 - element.min_charge
-            up = Gamma[k:k + n - 1] + n_e * q_CI[k:k + n - 1] + n_HII * k_CX_ion[k:k + n - 1]
+            up2 = Gamma_auger[k:k + n - 1].copy()
+            up2[-1] = 0.0                                # 裸の 1 つ手前 (水素様) から 2 段は電離できない
+            up = Gamma[k:k + n - 1] - up2 + n_e * q_CI[k:k + n - 1] + n_HII * k_CX_ion[k:k + n - 1]
             down = n_e * alpha[k + 1:k + n] + n_HI * k_CX_rec[k + 1:k + n]
-            x[k:k + n] = self._solve_ionization_balance(up, down)
+            x[k:k + n] = self._solve_ionization_balance(numpy.maximum(up, 0.0), down, up2)
         return x
 
     # ------------------------------------------------------------------
@@ -323,9 +350,10 @@ class PhotoionizationModel:
                     tau = (n_ion @ self.sigma_matrix) * dr
                     phi = numpy.where(tau > 1e-8, -numpy.expm1(-numpy.minimum(tau, 700.0)) / numpy.maximum(tau, 1e-300), 1.0 - 0.5 * tau)
                     Gamma = self.sigma_matrix @ (base * phi)
+                    Gamma_auger = self.auger_matrix @ (base * phi)
                     if numpy.sum(Gamma) <= 0.0:
                         break
-                    x_loc = self._solve_all_elements(Gamma, n_e, T_loc, *self._hydrogen_densities(n_ion))
+                    x_loc = self._solve_all_elements(Gamma, n_e, T_loc, *self._hydrogen_densities(n_ion), Gamma_auger=Gamma_auger)
 
                 for local_it in range(max_local_iterations):
                     last_local_it = local_it
@@ -340,6 +368,7 @@ class PhotoionizationModel:
 
                     # 光電離率 [s^-1] と加熱率 [erg s^-1 cm^-3]
                     Gamma = self.sigma_matrix @ c_E
+                    Gamma_auger = self.auger_matrix @ c_E
                     heating_PI_ion = n_ion * (self.heating_matrix @ c_E)
                     heating_PI = numpy.sum(heating_PI_ion)
                     heating_compton = n_e * numpy.sum(self.compton_heating_weight * c_E)
@@ -377,7 +406,7 @@ class PhotoionizationModel:
                             T_new = self._solve_thermal_balance(thermal_balance_residual, T_loc)
 
                         # --- 電離平衡 ---
-                        x_new = self._solve_all_elements(Gamma, n_e, T_new, *self._hydrogen_densities(n_ion))
+                        x_new = self._solve_all_elements(Gamma, n_e, T_new, *self._hydrogen_densities(n_ion), Gamma_auger=Gamma_auger)
 
                     # 収束判定
                     if numpy.max(numpy.abs(x_new - x_loc)) < fraction_tolerance and abs(T_new - T_loc) < temperature_tolerance * T_loc:

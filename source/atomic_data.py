@@ -246,22 +246,104 @@ def load_photoionization_channels(element, number_of_electrons, ionization_poten
     FAC の電離ポテンシャルは実験値からずれている（例: C I で 10.317 eV、実験値 11.260 eV）ため、
     最低閾値のチャネルが実験値 ionization_potential_eV に一致するよう、全チャネルの I を同じ量だけずらす
     （チャネル間の閾値の差は FAC の値を保つ）。
-    戻り値: [(I [eV], Σ0 [cm^2], Γ, τ [eV]), ...] (電離ポテンシャルの昇順)。ファイルがなければ None。
+    各チャネルについて、電離後の準位が自動電離するときの Auger 電離の確率 P_A と Auger 電子の平均エネルギー E_A [eV] を
+    auger_branching() で求める (データがなければ 0)。
+    戻り値: [(I [eV], Σ0 [cm^2], Γ, τ [eV], P_A, E_A [eV]), ...] (電離ポテンシャルの昇順)。ファイルがなければ None。
     """
     filepath = os.path.join(constants.ATOMIC_DATA_DIR, element, f"{fac_ion_symbol(element, number_of_electrons)}.pi")
     if not os.path.exists(filepath):
         return None
-    channels = []
+    raw = []
     with open(filepath) as f:
         for line in f:
             columns = line.split()
             if columns and int(columns[0]) == 0:  # 基底準位からの光電離
-                channels.append((float(columns[5]), float(columns[6]), float(columns[7]), float(columns[8])))
-    if not channels:
+                raw.append((float(columns[5]), float(columns[6]), float(columns[7]), float(columns[8]), int(columns[3])))
+    if not raw:
         raise ValueError(f"No photoionization data for the ground level in {filepath}")
-    channels.sort()
-    shift = ionization_potential_eV - channels[0][0]
-    return [(I + shift, Sigma0, Gamma, tau) for I, Sigma0, Gamma, tau in channels]
+    raw.sort()
+    I_FAC_0 = raw[0][0]
+    shift = ionization_potential_eV - I_FAC_0
+    channels = []
+    for I, Sigma0, Gamma, tau, twoj in raw:
+        P_A, E_A = auger_branching(element, number_of_electrons - 1, I - I_FAC_0, twoj)
+        channels.append((I + shift, Sigma0, Gamma, tau, P_A, E_A))
+    return channels
+
+
+# ---------------------------------------------------------------------------
+# Auger 電離: 内殻光電離で生じた空孔準位の自動電離 (FAC の .en, .ai, .rd.tr)
+# ---------------------------------------------------------------------------
+_decay_cache = {}
+
+
+def _load_decay_data(element, number_of_electrons):
+    """
+    電子数 number_of_electrons のイオンの FAC データ (共有 DB) から
+      levels: [(準位番号, エネルギー [eV], 2J)]  (.en、イオン自身の準位番号)
+      autoionization: {準位: (Σ A_ai [s^-1], Σ A_ai E_e [eV s^-1])}  (.ai: 準位, 2J, 終状態, 2J, Auger 電子のエネルギー [eV], 率)
+      radiative: {準位: Σ A_rad [s^-1]}  (.rd.tr の最終列)
+    を読む。.ai がなければ None。
+    """
+    key = (element, number_of_electrons)
+    if key in _decay_cache:
+        return _decay_cache[key]
+    prefix = os.path.join(constants.ATOMIC_DATA_DIR, element, fac_ion_symbol(element, number_of_electrons))
+    if number_of_electrons < 1 or not all(os.path.exists(prefix + ext) for ext in (".en", ".ai", ".rd.tr")):
+        _decay_cache[key] = None
+        return None
+    levels = []
+    with open(prefix + ".en") as f:
+        for line in f:
+            columns = line.split()
+            if len(columns) >= 7:
+                levels.append((int(columns[1]), float(columns[3]), int(columns[6])))
+    autoionization = {}
+    with open(prefix + ".ai") as f:
+        for line in f:
+            columns = line.split()
+            if len(columns) >= 6:
+                level, energy, rate = int(columns[0]), float(columns[4]), float(columns[5])
+                A, AE = autoionization.get(level, (0.0, 0.0))
+                autoionization[level] = (A + rate, AE + rate * energy)
+    radiative = {}
+    with open(prefix + ".rd.tr") as f:
+        for line in f:
+            columns = line.split()
+            if len(columns) >= 7:
+                level = int(columns[0])
+                radiative[level] = radiative.get(level, 0.0) + float(columns[-1])
+    data = (numpy.array([l[1] for l in levels]), numpy.array([l[2] for l in levels]), [l[0] for l in levels], autoionization, radiative)
+    _decay_cache[key] = data
+    return data
+
+
+def auger_branching(element, number_of_electrons, excitation_eV, twoj):
+    """
+    光電離で生じた、電子数 number_of_electrons のイオンの準位 (基底からの励起エネルギー excitation_eV、2J = twoj) が
+    自動電離する確率 P_A = Σ A_ai / (Σ A_ai + Σ A_rad) と Auger 電子の平均エネルギー E_A [eV]。
+    準位は .pi の電離後の準位番号ではなく (FAC の計算ごとに番号が違うため)、同じ 2J で励起エネルギーが最も近い準位を選ぶ
+    (差が max(1 eV, 10^-3 × 励起エネルギー) を超えたら対応なしとみなす)。価電子の光電離 (励起エネルギー ≈ 0) や
+    データのないイオン (電子数 > 10 は .ai がない) では (0, 0)。Auger 後の終状態がさらに自動電離する多重 Auger は扱わない。
+    """
+    if excitation_eV < 1.0:
+        return 0.0, 0.0
+    data = _load_decay_data(element, number_of_electrons)
+    if data is None:
+        return 0.0, 0.0
+    energies, twojs, indices, autoionization, radiative = data
+    candidates = numpy.nonzero(twojs == twoj)[0]
+    if len(candidates) == 0:
+        return 0.0, 0.0
+    best = candidates[numpy.argmin(numpy.abs(energies[candidates] - excitation_eV))]
+    if abs(energies[best] - excitation_eV) > max(1.0, 1.0e-3 * excitation_eV):
+        return 0.0, 0.0
+    level = indices[best]
+    A_ai, AE_ai = autoionization.get(level, (0.0, 0.0))
+    A_rad = radiative.get(level, 0.0)
+    if A_ai <= 0.0:
+        return 0.0, 0.0
+    return A_ai / (A_ai + A_rad), AE_ai / A_ai
 
 
 def photoionization_cross_section(E_eV, channels):
@@ -271,21 +353,31 @@ def photoionization_cross_section(E_eV, channels):
     """
     E = numpy.asarray(E_eV, dtype=float)
     sigma = numpy.zeros_like(E)
-    for I, Sigma0, Gamma, tau in channels:
+    for I, Sigma0, Gamma, tau, *_ in channels:
         sigma += numpy.where(E < I, 0.0, Sigma0 * (E / I)**Gamma * numpy.exp(-E / tau))
+    return sigma
+
+
+def auger_cross_section(E_eV, channels):
+    """光電離のうち Auger 電離を伴って 2 段電離する分の断面積 Σ_k σ_k(E) P_A,k [cm^2]"""
+    E = numpy.asarray(E_eV, dtype=float)
+    sigma = numpy.zeros_like(E)
+    for I, Sigma0, Gamma, tau, P_A, E_A in channels:
+        if P_A > 0.0:
+            sigma += numpy.where(E < I, 0.0, P_A * Sigma0 * (E / I)**Gamma * numpy.exp(-E / tau))
     return sigma
 
 
 def photoionization_heating_cross_section(E_eV, channels):
     """
-    光電離加熱の断面積 Σ_k σ_k(E) (E - I_k) [erg cm^2]
-    各チャネルで光電子が持ち去るエネルギー E - I_k が加熱に寄与する
-    （電離後のイオンの励起エネルギーは放射で失われるとみなす。内殻電離に続く Auger 電離は未実装）
+    光電離加熱の断面積 Σ_k σ_k(E) [(E - I_k) + P_A,k E_A,k] [erg cm^2]
+    各チャネルで光電子が持ち去るエネルギー E - I_k と、空孔準位が自動電離したときの Auger 電子のエネルギー E_A が加熱に寄与する
+    （放射で緩和する分の励起エネルギーは蛍光などとして失われるとみなす）
     """
     E = numpy.asarray(E_eV, dtype=float)
     heating = numpy.zeros_like(E)
-    for I, Sigma0, Gamma, tau in channels:
-        heating += numpy.where(E < I, 0.0, Sigma0 * (E / I)**Gamma * numpy.exp(-E / tau) * (E - I) * eV)
+    for I, Sigma0, Gamma, tau, P_A, E_A in channels:
+        heating += numpy.where(E < I, 0.0, Sigma0 * (E / I)**Gamma * numpy.exp(-E / tau) * (E - I + P_A * E_A) * eV)
     return heating
 
 
@@ -371,6 +463,12 @@ class IonData:
             return photoionization_cross_section(E_eV, self.channels)
         if self.table is not None:
             return tabulated_cross_section(E_eV, self.table, self.ip_eV)
+        return numpy.zeros_like(numpy.asarray(E_eV, dtype=float))
+
+    def auger_cross_section(self, E_eV):
+        """光電離のうち Auger 電離を伴って 2 段上に電離する分の断面積 [cm^2]（FAC のチャネルがなければ 0）"""
+        if self.channels is not None:
+            return auger_cross_section(E_eV, self.channels)
         return numpy.zeros_like(numpy.asarray(E_eV, dtype=float))
 
     def photoionization_heating_cross_section(self, E_eV):

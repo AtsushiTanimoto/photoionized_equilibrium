@@ -1,0 +1,98 @@
+ xstar version 2.59j
+ 
+ pass number=           1          -1
+   log(r) delr/r log(N) log(xi) x_e   log(n) log(t) h-c(%) h-c(%) log(tau)
+                                                                  fwd    rev
+   15.75 -36.00 -10.00   3.50   1.21   9.00   6.35   0.01   0.00 -10.00 -10.00 12
+   15.75 -36.00 -10.00   3.50   1.21   9.00   6.35   0.01   0.11 -10.00 -10.00  1
+   15.75  -3.75  21.00   3.50   1.21   9.00   6.35   0.01   0.11  -2.94 -10.00  1
+  final print:           0
+ xstar: Prepping to write spectral data 
+ xstar: Done writing spectral data
+ total time   189.31225002184510
+0E-02
+density (cm**-3)=       1.000E+09
+ spectrum type=file    
+ spectrum file=diskbb.d
+ spectrum units? (0=energy, 1=photons)           0
+radiation temperature or alpha=  2.901E+00
+luminosity (/10**38 erg/s)=  1.000E+06
+column density (cm**-2  1.000E+21
+log(ionization parameter)=  3.500E+00
+flux=                   2.518E+11
+ abundance table: angr
+ abundances:
+ element,   rel.to cosmic,     rel. to H,     H=12
+ H abund=  1.000E+00  1.000E+00  1.200E+01
+ Heabund=  1.000E+00  9.770E-02  1.099E+01
+ Liabund=  1.000E+00  1.450E-11  1.161E+00
+ Beabund=  1.000E+00  1.410E-11  1.149E+00
+ B abund=  1.000E+00  3.980E-10  2.600E+00
+ C abund=  1.000E+00  3.630E-04  8.560E+00
+ N abund=  1.000E+00  1.120E-04  8.049E+00
+ O abund=  1.000E+00  8.510E-04  8.930E+00
+ F abund=  1.000E+00  3.630E-08  4.560E+00
+ Neabund=  1.000E+00  1.230E-04  8.090E+00
+ Naabund=  1.000E+00  2.140E-06  6.330E+00
+ Mgabund=  1.000E+00  3.800E-05  7.580E+00
+ Alabund=  1.000E+00  2.950E-06  6.470E+00
+ Siabund=  1.000E+00  3.550E-05  7.550E+00
+ P abund=  1.000E+00  2.820E-07  5.450E+00
+ S abund=  1.000E+00  1.620E-05  7.210E+00
+ Clabund=  1.000E+00  3.160E-07  5.500E+00
+ Arabund=  1.000E+00  3.630E-06  6.560E+00
+ K abund=  1.000E+00  1.320E-07  5.121E+00
+ Caabund=  1.000E+00  2.290E-06  6.360E+00
+ Scabund=  1.000E+00  1.260E-09  3.100E+00
+ Tiabund=  1.000E+00  9.770E-08  4.990E+00
+ V abund=  1.000E+00  1.000E-08  4.000E+00
+ Crabund=  1.000E+00  4.680E-07  5.670E+00
+ Mnabund=  1.000E+00  2.450E-07  5.389E+00
+ Feabund=  1.000E+00  4.680E-05  7.670E+00
+ Coabund=  1.000E+00  8.320E-08  4.920E+00
+ Niabund=  1.000E+00  1.780E-06  6.250E+00
+ Cuabund=  1.000E+00  1.620E-08  4.210E+00
+ Znabund=  1.000E+00  3.980E-08  4.600E+00
+ model name=three_code_benchmark          
+ number of steps=           5
+ number of iterations=          99
+ write switch (1=yes, 0=no)=           0
+ print switch (1=yes, 0=no)=           0
+ step size choice switch=           0
+ loop control (0=standalone)=           0
+ number of passes=           1
+ emult=  0.50000000000000000     
+ taumax=   2.0000000000000000     
+ xeemin=   9.9999997764825821E-003
+ critf=   1.0000000116860974E-007
+ vturbi=   141.41999816894531     
+ ncn2=       99999
+ radexp=   0.0000000000000000     
+
+ 
+ running ...
+ U(1-1.8),U(1.8-4):   11697448775128.838        20368872119838.977     
+ Lbol=   1051128.7816339089     
+  
+ pass number=           1          -1
+ print option:17
+   log(r) delr/r log(N) log(xi) x_e   log(n) log(t) h-c(%) h-c(%) log(tau) 
+                                                                  fwd    rev    
+   15.75 -36.00 -10.00   3.50   1.21   9.00   6.35   0.01   0.00 -10.00 -10.00 12
+   15.75 -36.00 -10.00   3.50   1.21   9.00   6.35   0.01   0.11 -10.00 -10.00  1
+   15.75  -3.75  21.00   3.50   1.21   9.00   6.35   0.01   0.11  -2.94 -10.00  1
+  
+  final print:           0
+  2.22841363E+02  9.30322318E-05  9.31637541E-05 -1.41273025E-03
+  
+ print option:22
+  r=  5.624E+15 t=  2.228E+02 log(xi)=  3.500E+00 n_e=  1.209E+09 n_p=  1.000E+09
+ httot=  9.303E-05 cltot=  9.316E-05taulc=  1.140E-03taulcb=  0.000E+00
+  log(Xi)=  1.092E+00 log(u1)=  4.468E-01 log(ux)=  3.631E-01 gamma=  7.325E-02 rdel=  1.000E+12
+ 
+ print option:11
+ after writespectra   119.60780334472656     
+ after writespectra2   7.3150634765625000E-002
+ after writespectra3  0.10050964355468750     
+ after writespectra4   8.6059570312500000E-002
+ total time   189.31225002184510     
