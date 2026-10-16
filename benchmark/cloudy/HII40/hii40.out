@@ -1,7 +1,7 @@
                                                           Cloudy 25.00
                                                          www.nublado.org
 
-                                                  PRNG seed: 0xe3ca5fbd67f845d4
+                                                  PRNG seed: 0x9330a8b71a99300e
 
                        **************************************25Aug25**************************************
                        *                                                                                 *
@@ -49,6 +49,7 @@
                        * save overview last "hii40.ovr"                                                  *
                        * save cooling last "hii40.col"                                                   *
                        * save heating last "hii40.het"                                                   *
+                       * save each cooling last "hii40.cole"                                             *
                        * save element carbon last "hii40.c"                                              *
                        * save element nitrogen last "hii40.n"                                            *
                        * save element oxygen last "hii40.o"                                              *
@@ -173,6 +174,7 @@
                        * save overview last "hii40.ovr"                                                  *
                        * save cooling last "hii40.col"                                                   *
                        * save heating last "hii40.het"                                                   *
+                       * save each cooling last "hii40.cole"                                             *
                        * save element carbon last "hii40.c"                                              *
                        * save element nitrogen last "hii40.n"                                            *
                        * save element oxygen last "hii40.o"                                              *
@@ -6239,7 +6241,7 @@ TIR                 1800.00m    35.202    0.0078
    <a>:1.86E-08  erdeFe0.0E+00  Tcompt7.39E+09  Tthr3.26E+11  <Tden>: 7.89E+03  <dens>:2.35E-22  <MolWgt>6.50E-01
      Mean Jeans  l(cm)3.23E+20  M(sun)2.09E+06  smallest:     len(cm):1.13E+20  M(sun):8.89E+04  a_ox tran:  0.00
  Rion:1.462E+19  Dist:0.00E+00  Diam:0.000E+00
- Hatom level 70  HatomType: add  HInducImp  F  He tot level: 63  He2 level:   70  ExecTime    19.2
+ Hatom level 70  HatomType: add  HInducImp  F  He tot level: 63  He2 level:   70  ExecTime    19.6
  ConvrgError(%)  <eden>  0.050  MaxEden  0.802  <H-C>   0.06  Max(H-C)    0.39  <Press>   0.000  MaxPrs er  0.000
   Continuity(%)  chng Te   9.5  elec den   5.4  n(H2)    0.0  n(CO)        0.0
 
@@ -6403,6 +6405,7 @@ Lexington 2000 HII40
                        * save overview last "hii40.ovr"                                                  *
                        * save cooling last "hii40.col"                                                   *
                        * save heating last "hii40.het"                                                   *
+                       * save each cooling last "hii40.cole"                                             *
                        * save element carbon last "hii40.c"                                              *
                        * save element nitrogen last "hii40.n"                                            *
                        * save element oxygen last "hii40.o"                                              *
@@ -11976,7 +11979,7 @@ TIR                 1800.00m    35.201    0.0077
    <a>:1.86E-08  erdeFe0.0E+00  Tcompt7.39E+09  Tthr3.26E+11  <Tden>: 7.89E+03  <dens>:2.35E-22  <MolWgt>6.50E-01
      Mean Jeans  l(cm)3.23E+20  M(sun)2.09E+06  smallest:     len(cm):1.13E+20  M(sun):8.98E+04  a_ox tran:  0.00
  Rion:1.461E+19  Dist:0.00E+00  Diam:0.000E+00
- Hatom level 70  HatomType: add  HInducImp  F  He tot level: 63  He2 level:   70  ExecTime    29.7
+ Hatom level 70  HatomType: add  HInducImp  F  He tot level: 63  He2 level:   70  ExecTime    30.6
  ConvrgError(%)  <eden>  0.049  MaxEden  0.795  <H-C>   0.06  Max(H-C)    0.38  <Press>   0.000  MaxPrs er  0.000
   Continuity(%)  chng Te   9.5  elec den   5.4  n(H2)    0.0  n(CO)        0.0
 
@@ -12217,5 +12220,5 @@ Lexington 2000 HII40
          1 mean step length searches/chemistry step
 ----------------------------------------------------
 
- Cloudy ends: 199 zones, 2 iterations. (single thread) ExecTime(s) 29.74
+ Cloudy ends: 199 zones, 2 iterations. (single thread) ExecTime(s) 30.62
  [Stop in cdMain at maincl.cpp:590, Cloudy exited OK]

@@ -62,7 +62,8 @@ def write_input(model_name):
     if not reference["matter_bounded"]:
         lines += ["stop temperature 1000", "stop efrac -2"]
     lines += ["print line faint -6", "print lines column", "print lines sort wavelength",
-              f"save overview last \"{name}.ovr\"", f"save cooling last \"{name}.col\"", f"save heating last \"{name}.het\""]
+              f"save overview last \"{name}.ovr\"", f"save cooling last \"{name}.col\"", f"save heating last \"{name}.het\"",
+              f"save each cooling last \"{name}.cole\""]
     for symbol in reference["abundances"]:
         if symbol not in ("H", "He"):
             lines.append(f"save element {CLOUDY_NAMES[symbol]} last \"{name}.{symbol.lower()}\"")

@@ -42,6 +42,7 @@ print lines sort wavelength
 save overview last "pn150.ovr"
 save cooling last "pn150.col"
 save heating last "pn150.het"
+save each cooling last "pn150.cole"
 save element carbon last "pn150.c"
 save element nitrogen last "pn150.n"
 save element oxygen last "pn150.o"

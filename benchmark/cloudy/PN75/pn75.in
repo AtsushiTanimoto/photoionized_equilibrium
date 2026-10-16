@@ -40,6 +40,7 @@ print lines sort wavelength
 save overview last "pn75.ovr"
 save cooling last "pn75.col"
 save heating last "pn75.het"
+save each cooling last "pn75.cole"
 save element carbon last "pn75.c"
 save element nitrogen last "pn75.n"
 save element oxygen last "pn75.o"

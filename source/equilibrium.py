@@ -211,14 +211,16 @@ class PhotoionizationModel:
     #   基底状態への再結合連続光 (α_1 = α_A − α_B、Milne の関係の形) と、Case B の再結合のあとに出る H を電離できる線:
     #   He I: 3/4 が三重項で 2³S → 1¹S の 19.82 eV、1/4 が一重項でそのうち 2/3 が 2¹P → 1¹S の 21.22 eV (残りは 2 光子、扱わない)。
     #   He II: 2/3 が Lyα 40.81 eV (残り 1/3 は 2s からの 2 光子、扱わない)。
-    DIFFUSE_COMPONENTS = [("H00", "H01", recombination.HI_alphaB, []),
-                          ("He01", "He02", recombination.HeI_alphaB, [(19.82, 0.75), (21.22, 0.25 * 2.0 / 3.0)]),
-                          ("He00", "He01", recombination.HeII_alphaB, [(40.81, 2.0 / 3.0)])]
+    #   He II はさらに、Case B の再結合の 1/3 が 2s → 1s の 2 光子放射 (0〜40.81 eV) になり、n = 2 への直接の再結合
+    #   (α_2、Balmer 連続光、13.61 eV 以上で H を電離できる) を加える。H I の 2 光子と Balmer 連続光は H を電離できないので扱わない。
+    DIFFUSE_COMPONENTS = [("H00", "H01", recombination.HI_alphaB, [], None, None),
+                          ("He01", "He02", recombination.HeI_alphaB, [(19.82, 0.75), (21.22, 0.25 * 2.0 / 3.0)], None, None),
+                          ("He00", "He01", recombination.HeII_alphaB, [(40.81, 2.0 / 3.0)], (40.81, 1.0 / 3.0), (13.606, recombination.HeII_alpha2))]
 
     def _setup_diffuse_tables(self, T, alpha_A):
         """拡散光の成分ごとに、基底状態への再結合係数 α_1 = α_A − α_B と Case B の α_B を温度表にする"""
         self.diffuse_components = []
-        for upper_symbol, lower_symbol, alpha_B_function, lines in self.DIFFUSE_COMPONENTS:
+        for upper_symbol, lower_symbol, alpha_B_function, lines, two_photon, balmer in self.DIFFUSE_COMPONENTS:
             if upper_symbol not in self.ion_symbols or lower_symbol not in self.ion_symbols:
                 continue
             k_upper = self.ion_symbols.index(upper_symbol)
@@ -226,8 +228,22 @@ class PhotoionizationModel:
             alpha_B = alpha_B_function(T)
             alpha_1 = numpy.maximum(alpha_A[k_upper] - alpha_B, 0.0)
             line_bins = [(int(numpy.searchsorted(self.E_edges, E) - 1), n) for E, n in lines if self.E_edges[0] < E < self.E_edges[-1]]
-            self.diffuse_components.append({"upper": k_upper, "lower": k_lower, "ip_eV": self.ions[k_lower].ip_eV,
-                                            "alpha_1": _log10_table(alpha_1[None, :]), "alpha_B": _log10_table(alpha_B[None, :]), "lines": line_bins})
+            component = {"upper": k_upper, "lower": k_lower, "ip_eV": self.ions[k_lower].ip_eV,
+                         "alpha_1": _log10_table(alpha_1[None, :]), "alpha_B": _log10_table(alpha_B[None, :]), "lines": line_bins,
+                         "two_photon": None, "balmer": None}
+            if two_photon is not None:
+                # ビンごとの光子数の分布 (2 光子の崩壊 1 回あたり、ビン幅で積分) × Case B の再結合 1 回あたりの崩壊数
+                E_max, decays_per_recombination = two_photon
+                y_edges = numpy.clip(self.E_edges / E_max, 0.0, 1.0)
+                y_fine = numpy.linspace(0.0, 1.0, 4001)
+                cumulative = numpy.concatenate([[0.0], numpy.cumsum(0.5 * (recombination.two_photon_distribution(y_fine[1:])
+                                                                           + recombination.two_photon_distribution(y_fine[:-1])) * numpy.diff(y_fine))])
+                photons_per_bin = numpy.diff(numpy.interp(y_edges, y_fine, cumulative))
+                component["two_photon"] = photons_per_bin * decays_per_recombination
+            if balmer is not None:
+                E_threshold, alpha_2_function = balmer
+                component["balmer"] = (E_threshold, _log10_table(alpha_2_function(T)[None, :]))
+            self.diffuse_components.append(component)
 
     def _diffuse_emission(self, T, n_e, n_ion):
         """
@@ -252,6 +268,15 @@ class PhotoionizationModel:
             rate_B = n_e * n_upper * _interpolate_log_table(T, component["alpha_B"])[0]
             for k, photons_per_recombination in component["lines"]:
                 emission[k] += rate_B * photons_per_recombination
+            if component["two_photon"] is not None:
+                emission += rate_B * component["two_photon"]
+            if component["balmer"] is not None:
+                # n = 2 への再結合連続光: 水素様の σ ∝ E⁻³ の Milne の形 j(E) ∝ E⁻¹ exp(−(E − E_2)/kT) (E ≥ E_2)
+                E_2, alpha_2_table = component["balmer"]
+                rate_2 = n_e * n_upper * _interpolate_log_table(T, alpha_2_table)[0]
+                shape = numpy.where(self.E_eV >= E_2, numpy.exp(-numpy.minimum((self.E_eV - E_2) / kT_eV, 700.0)) / self.E_eV, 0.0) * dE
+                if numpy.sum(shape) > 0.0:
+                    emission += rate_2 * shape / numpy.sum(shape)
         return emission
 
     def rates_at(self, T):

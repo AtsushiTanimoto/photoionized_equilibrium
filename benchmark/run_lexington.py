@@ -298,6 +298,7 @@ if __name__ == "__main__":
     model.setup_grids()
     model.calculate_equilibrium(N_packets=args.n_packets, max_global_iterations=args.iterations)
     print(model.save_tsv(f"{args.output}.tsv"))
+    print(model.save_heating_cooling_tsv(f"{args.output}_heating_cooling.tsv"))
     results = benchmark_quantities(model, args.model)
 
     print(save_results(results, args.model, args.output))

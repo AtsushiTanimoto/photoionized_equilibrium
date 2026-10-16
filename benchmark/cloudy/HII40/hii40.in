@@ -42,6 +42,7 @@ print lines sort wavelength
 save overview last "hii40.ovr"
 save cooling last "hii40.col"
 save heating last "hii40.het"
+save each cooling last "hii40.cole"
 save element carbon last "hii40.c"
 save element nitrogen last "hii40.n"
 save element oxygen last "hii40.o"
