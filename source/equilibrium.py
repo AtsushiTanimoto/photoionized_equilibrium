@@ -56,7 +56,8 @@ class PhotoionizationModel:
     def __init__(self, radius_edges, hydrogen_number_density, source,
                  elements=constants.BENCHMARK_ELEMENTS, abundances=constants.ABUNDANCES_ANGR,
                  T_gas=1e4, N_nu=2000, E_min_eV=None, E_max_eV=None,
-                 recombination_case="A", N_levels_max=None, auger=True, diffuse=False, line_transfer=False, turbulence_km_s=0.0):
+                 recombination_case="A", N_levels_max=None, auger=True, diffuse=False, line_transfer=False, turbulence_km_s=0.0,
+                 excitation_autoionization=True):
         """
         radius_edges:            半径セルの境界 [cm]（長さ N_r + 1、昇順）
         hydrogen_number_density: 全水素数密度 [cm^-3]（一様）
@@ -68,6 +69,7 @@ class PhotoionizationModel:
         E_min_eV, E_max_eV:      エネルギービンの範囲 [eV]（省略時は最低の電離閾値から光源の上限まで）
         recombination_case:      "A" (CHIANTI の RR+DR) または "B" (H, He のみ Case B の近似式に置き換える; HII 領域向け)
         N_levels_max:            輝線冷却で考慮する準位数（省略時は N_LEVELS_MAX）
+        excitation_autoionization: 衝突電離に励起自動電離 (CHIANTI の easplups) を含めるか
         """
         self.radius_edges = numpy.asarray(radius_edges, dtype=float)
         self.N_r = len(self.radius_edges) - 1
@@ -84,6 +86,7 @@ class PhotoionizationModel:
         self.E_max_eV = E_max_eV
         self.recombination_case = recombination_case
         self.N_levels_max = N_levels_max
+        self.excitation_autoionization = excitation_autoionization   # 衝突電離に励起自動電離を含めるか
         self.auger = auger              # 内殻光電離に続く Auger 電離 (2 段電離と Auger 電子の加熱) を入れるか
         self.diffuse = diffuse          # H, He の拡散光を外向き近似で輸送するか (True なら recombination_case は "A")
         self.line_transfer = line_transfer   # 輝線の光学的厚さを脱出確率で入れるか (輝線冷却と輝線放射に効く)
@@ -177,7 +180,7 @@ class PhotoionizationModel:
         alpha_DR = numpy.array([ion.alpha_DR(T) for ion in self.ions])
         rr_cooling = numpy.array([ion.rr_cooling(T) for ion in self.ions])
         dr_cooling = numpy.array([ion.dr_cooling(T) for ion in self.ions])
-        q_CI = numpy.array([ion.q_CI(T) for ion in self.ions])
+        q_CI = numpy.array([ion.q_CI(T, self.excitation_autoionization) for ion in self.ions])   # 直接電離 + 励起自動電離
         # H との電荷交換 (Kingdon & Ferland 1996): k_CX_rec はこのイオン + H I → 1 階下、k_CX_ion はこのイオン + H II → 1 階上
         k_CX_rec = numpy.array([charge_exchange.recombination_rate(ion.Z, ion.charge, T) for ion in self.ions])
         k_CX_ion = numpy.array([charge_exchange.ionization_rate(ion.Z, ion.charge, T) for ion in self.ions])

@@ -23,6 +23,7 @@ if __name__ == "__main__":
     parser.add_argument("--xstar-spectrum", default=None, help="XSTAR の xout_spect1.fits を光源に使う（省略時は --source）")
     parser.add_argument("--source", default="bbody", choices=["bbody", "diskbb"], help="光源: 黒体 (bbody) か標準円盤の多温度黒体 (diskbb、温度は内縁温度)")
     parser.add_argument("--T-source", type=float, default=2.9011e+07, help="黒体温度 / 円盤の内縁温度 [K] (既定 kT = 2.5 keV)")
+    parser.add_argument("--no-ea", action="store_true", help="衝突電離に励起自動電離を入れない (比較用)")
     parser.add_argument("--no-auger", action="store_true", help="内殻光電離に続く Auger 電離を入れない (比較用)")
     parser.add_argument("--n-cells", type=int, default=2)
     parser.add_argument("--n-packets", type=int, default=200000)
@@ -60,7 +61,7 @@ if __name__ == "__main__":
     model = equilibrium.PhotoionizationModel(
         radius_edges=radius_edges, hydrogen_number_density=hydrogen_number_density, source=light_source,
         elements=args.elements.split(","), abundances=constants.ABUNDANCES_ANGR, T_gas=args.T_init, N_nu=args.n_energy,
-        auger=not args.no_auger)
+        auger=not args.no_auger, excitation_autoionization=not args.no_ea)
     model.setup_grids()
     model.calculate_equilibrium(N_packets=args.n_packets, max_global_iterations=args.iterations, fixed_temperature=args.fix_temperature)
     print("Saving results to TSV...", flush=True)

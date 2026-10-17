@@ -7,7 +7,8 @@
     それより低い電離段階は扱わない (ElementData.min_charge を参照)。
   - 電離ポテンシャル: CHIANTI の ip/chianti.ip (実験値)。FAC の閾値はこれに合わせてずらす。
   - 再結合係数: CHIANTI の *.rrparams (Badnell 2006 放射再結合) と *.drparams (二電子再結合のフィット)。
-  - 衝突電離: CHIANTI の *.diparams (Dere 2007 のスケールした断面積) を Maxwell 分布で積分する。
+  - 衝突電離: CHIANTI の *.diparams (Dere 2007 のスケールした断面積) を Maxwell 分布で積分する直接電離と、
+    *.easplups (内殻励起のあとの自動電離。Burgess-Tully でスケールした有効衝突強度) の励起自動電離の和。
 
 イオンは電荷 j (0: 中性, ..., Z: 裸) で指定する。CHIANTI のイオン番号 (分光学的記法) は j+1、
 MONACO/XSTAR の CSV のイオン記号は <元素><電子数 2 桁> (例: Fe24 = Fe III? ではなく 24 電子 = Fe III)。
@@ -19,6 +20,7 @@ import os
 import scipy.interpolate
 
 import constants
+import line_cooling
 
 # 物理定数 (cgs、astropy.constants の CODATA 値)
 k_B = astropy.constants.k_B.cgs.value  # ボルツマン定数 [erg K^-1]
@@ -171,7 +173,7 @@ def load_chianti_direct_ionization(element, charge):
     形式: 1 行目 Z, イオン番号, 節点数, 殻の数 nfac, 励起自動電離の有無 neaev
           殻ごとに 2 行: (f, スケールした エネルギー x の節点...), (電離閾値 I [eV], スケールした断面積 y の節点...)
     戻り値: [(f, I [eV], x_knots, y_knots), ...] (殻ごと)。データがなければ空のリスト。
-    励起自動電離 (*.easplups) は未実装。
+    励起自動電離は load_chianti_excitation_autoionization (*.easplups)。
     """
     directory, name = _chianti_ion_directory(element, charge + 1)
     filepath = os.path.join(directory, f"{name}.diparams")
@@ -186,6 +188,39 @@ def load_chianti_direct_ionization(element, charge):
         row_y = [float(v) for v in lines[2 + 2 * k].split()]
         shells.append((row_x[0], row_y[0], numpy.array(row_x[1:]), numpy.array(row_y[1:])))
     return shells
+
+
+def load_chianti_excitation_autoionization(element, charge):
+    """
+    電荷 charge のイオンの励起自動電離のデータ (CHIANTI の *.easplups, Dere 2007)。
+    1 行に 1 遷移: Z, イオン番号, 下準位, 上準位, Burgess-Tully の型, gf, 励起エネルギー ΔE [Ry], スケーリング定数 C,
+    スケールした有効衝突強度の節点 (スケールした温度 0〜1 の等間隔)。
+    戻り値: [(ΔE [Ry], 型, C, x_knots, y_knots), ...]。データがなければ空のリスト。
+    """
+    directory, name = _chianti_ion_directory(element, charge + 1)
+    filepath = os.path.join(directory, f"{name}.easplups")
+    if not os.path.exists(filepath):
+        return []
+    transitions = []
+    for line in read_chianti_numeric_lines(filepath):
+        values = line.split()
+        y_knots = numpy.array(values[8:], dtype=float)
+        transitions.append((float(values[6]), int(values[4]), float(values[7]), numpy.linspace(0.0, 1.0, len(y_knots)), y_knots))
+    return transitions
+
+
+def excitation_autoionization_rate(T_gas, transitions):
+    """
+    励起自動電離の係数 q_EA(T) [cm^3 s^-1] (ChiantiPy の eaRate と同じ規約。統計重率は 1 とする)
+      q_EA = 8.629×10⁻⁶ T^(-1/2) Σ_k Υ_k(T) exp(−ΔE_k / kT)
+    Υ_k は Burgess-Tully のスケーリングを戻した有効衝突強度 (line_cooling.effective_collision_strength)。
+    """
+    T_gas = numpy.asarray(T_gas, dtype=float)
+    rate = numpy.zeros_like(T_gas)
+    for delta_E_Ry, transition_type, C, x_knots, y_knots in transitions:
+        upsilon = numpy.maximum(line_cooling.effective_collision_strength(T_gas, delta_E_Ry, transition_type, C, x_knots, y_knots), 0.0)
+        rate += upsilon * numpy.exp(-numpy.minimum(delta_E_Ry * line_cooling.Ry / (k_B * T_gas), 700.0))
+    return 8.629e-6 / numpy.sqrt(T_gas) * rate
 
 
 def direct_ionization_cross_section(E_eV, shells):
@@ -430,6 +465,7 @@ class IonData:
       ip_eV:      電離ポテンシャル [eV] (裸のイオンでは None)
       rr, dr:     このイオンから 1 階下への再結合 (中性では None)
       di_shells:  このイオンの衝突電離断面積 (裸のイオンでは空)
+      ea_transitions: このイオンの励起自動電離 (データがなければ空)
     """
     def __init__(self, element, charge):
         self.element = element
@@ -443,11 +479,13 @@ class IonData:
             self.channels = load_photoionization_channels(element, self.number_of_electrons, self.ip_eV)
             self.table = load_epdl97_table(self.Z, self.ip_eV) if (self.channels is None and charge == 0) else None
             self.di_shells = load_chianti_direct_ionization(element, charge)
+            self.ea_transitions = load_chianti_excitation_autoionization(element, charge)
         else:
             self.ip_eV = None
             self.channels = None
             self.table = None
             self.di_shells = []
+            self.ea_transitions = []
         if charge > 0:
             self.rr_type, self.rr_parameters, self.dr_energies, self.dr_coefficients = load_chianti_recombination(element, charge)
         else:
@@ -505,9 +543,12 @@ class IonData:
             return numpy.zeros_like(numpy.asarray(T_gas, dtype=float))
         return dielectronic_recombination_cooling(T_gas, self.dr_energies, self.dr_coefficients)
 
-    def q_CI(self, T_gas):
-        """衝突電離係数 (このイオン → 1 階上) [cm^3 s^-1]"""
-        return direct_ionization_rate(T_gas, self.di_shells)
+    def q_CI(self, T_gas, excitation_autoionization=True):
+        """衝突電離係数 (このイオン → 1 階上) [cm^3 s^-1]: 直接電離 + 励起自動電離 (excitation_autoionization=False なら直接電離だけ)"""
+        q = direct_ionization_rate(T_gas, self.di_shells)
+        if excitation_autoionization and self.ea_transitions:
+            q = q + excitation_autoionization_rate(T_gas, self.ea_transitions)
+        return q
 
 
 class ElementData:

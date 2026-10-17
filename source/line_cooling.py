@@ -1,11 +1,13 @@
 """
 イオンの衝突励起による輝線冷却 (CHIANTI の準位・遷移・衝突強度データ、全元素共通)
 
-各イオンについて低い方から N_LEVELS_MAX 準位を考え、電子衝突（および C I, C II の微細構造準位では
+各イオンについて低い方から N 準位を考え（N はイオンごとの表 database/line_cooling/n_levels.tsv、なければ N_LEVELS_MAX）、
+電子衝突（および C I, C II の微細構造準位では
 H 原子衝突）と自発放射の統計平衡から準位占有率を解き、冷却率 Λ = Σ_i n_i Σ_j A_ij ΔE_ij を求める。
-計算を速くするため、衝突係数は温度グリッド上で読み込み時に準備しておき、
+計算を速くするため、衝突係数は温度グリッド上で読み込み時に準備しておき (単精度)、
 LineCoolingSet.table(n_e, n_HI, fractions) で温度グリッド上の冷却率の表を作り、
-LineCoolingSet.rate(T, table) で内挿して使う。
+LineCoolingSet.rate(T, table) で内挿して使う。表は log n_e の節点 (LOG_NE_NODE_STEP 間隔) ごとに解いてキャッシュし、
+節点の間は log Λ を log n_e について線形内挿する (H 原子衝突のあるイオンと脱出確率を使うときはその場で解く)。
 CHIANTI に衝突強度 (.scups) がないイオン (例: Fe XVI 以下の一部、Cr, Mn の多く) は冷却に寄与しないとみなす。
 """
 import astropy.constants
@@ -24,7 +26,24 @@ eV = astropy.units.eV.to(astropy.units.erg)  # 電子ボルト [erg]
 Ry = (astropy.constants.Ryd * astropy.constants.h * astropy.constants.c).cgs.value  # リュードベリ [erg]
 
 
-N_LEVELS_MAX = 20       # 各イオンで考慮する準位数の上限（低い方から）。60 準位との差は T ≤ 2×10⁴ K の C II-C IV で 0.1% 以下
+N_LEVELS_MAX = 20       # n_levels.tsv にないイオンで考慮する準位数（低い方から）
+# イオンごとの準位数 (make_line_cooling_levels.py が作る。冷却率が全準位の値と 2% 以内で一致する最小の準位数、上限 300)
+N_LEVELS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "database", "line_cooling", "n_levels.tsv")
+_n_levels_table = None
+
+
+def default_number_of_levels(name):
+    """イオン name (CHIANTI のイオン名) で考慮する準位数 (n_levels.tsv の値、なければ N_LEVELS_MAX)"""
+    global _n_levels_table
+    if _n_levels_table is None:
+        _n_levels_table = {}
+        if os.path.exists(N_LEVELS_FILE):
+            with open(N_LEVELS_FILE) as f:
+                header = f.readline().rstrip("\n").split("\t")
+                for line in f:
+                    row = dict(zip(header, line.rstrip("\n").split("\t")))
+                    _n_levels_table[row["ion"]] = int(row["N_levels"])
+    return _n_levels_table.get(name, N_LEVELS_MAX)
 
 # 冷却率の表の温度グリッド [K] (log10 T = 0, ..., 8)
 LOG_T_GRID = numpy.linspace(0.0, 8.0, 321)
@@ -153,12 +172,22 @@ def line_cooling_data_available(name):
 
 class LineCoolingIon:
     """1 つのイオンの多準位原子モデル (name は CHIANTI のイオン名、例: "c_2", "fe_25")"""
-    def __init__(self, name, N_levels_max=N_LEVELS_MAX):
+    def __init__(self, name, N_levels_max=None, log_T_grid=None):
+        """
+        N_levels_max: 考慮する準位数の上限 (None ならイオンごとの表 default_number_of_levels)
+        log_T_grid:   衝突係数と冷却率の表の温度グリッド log10 T (None なら LOG_T_GRID。準位数の調査用)
+        """
         self.name = name
+        self.log_T_grid = LOG_T_GRID if log_T_grid is None else numpy.asarray(log_T_grid, dtype=float)
+        T_GRID = 10**self.log_T_grid
+        self.T_grid = T_GRID
         directory = chianti_ion_directory(name)
         levels = _read_elvlc(os.path.join(directory, f"{name}.elvlc"))
+        if N_levels_max is None:
+            N_levels_max = default_number_of_levels(name)
         N = min(N_levels_max, len(levels))
         self.N_levels = N
+        self.N_levels_all = len(levels)
         self.g = numpy.array([levels[i + 1][0] for i in range(N)])
         self.energy = numpy.array([levels[i + 1][1] for i in range(N)]) * h * c  # [erg]
         self.term = [levels[i + 1][2] for i in range(N)]                             # 準位の名前（出力用）
@@ -186,8 +215,8 @@ class LineCoolingIon:
         # 各準位から自発放射で放出されるエネルギー Σ_j A_ij ΔE_ij [erg s^-1]
         self.radiated_power = numpy.sum(self.A * self.delta_E, axis=1)
 
-        # 電子衝突: C_e[t, i, j] は温度 T_GRID[t] で準位 i → j の係数 [cm^3 s^-1]
-        self.C_e = numpy.zeros((len(T_GRID), N, N))
+        # 電子衝突: C_e[t, i, j] は温度 T_GRID[t] で準位 i → j の係数 [cm^3 s^-1] (メモリを抑えるため単精度)
+        self.C_e = numpy.zeros((len(T_GRID), N, N), dtype=numpy.float32)
         for level1, level2, delta_E_Ry, transition_type, C, x_knots, y_knots in _read_scups(os.path.join(directory, f"{name}.scups")):
             i, j = level1 - 1, level2 - 1
             if i >= N or j >= N or i == j:
@@ -197,15 +226,17 @@ class LineCoolingIon:
             q_down = 8.629e-6 / (self.g[upper] * numpy.sqrt(T_GRID)) * upsilon
             self._add_collision_pair(self.C_e, lower, upper, q_down)
 
-        # H 原子衝突: C_H[t, i, j] [cm^3 s^-1]
-        self.C_H = numpy.zeros((len(T_GRID), N, N))
+        # H 原子衝突: C_H[t, i, j] [cm^3 s^-1] (データのあるイオンだけ。ほかは None)
+        self.C_H = None
         for (ion_name, upper, lower), rate in H_DEEXCITATION_RATE.items():
-            if ion_name == name:
+            if ion_name == name and upper <= N:
+                if self.C_H is None:
+                    self.C_H = numpy.zeros((len(T_GRID), N, N), dtype=numpy.float32)
                 self._add_collision_pair(self.C_H, lower - 1, upper - 1, rate(T_GRID))
 
     def _add_collision_pair(self, C_matrix, lower, upper, q_down):
         """脱励起係数 q_down(T) と詳細つり合いから得られる励起係数を衝突行列に加える"""
-        boltzmann = numpy.exp(-(self.energy[upper] - self.energy[lower]) / (k_B * T_GRID))
+        boltzmann = numpy.exp(-(self.energy[upper] - self.energy[lower]) / (k_B * self.T_grid))
         C_matrix[:, upper, lower] += q_down
         C_matrix[:, lower, upper] += q_down * self.g[upper] / self.g[lower] * boltzmann
 
@@ -222,12 +253,14 @@ class LineCoolingIon:
 
     def populations_at(self, n_e, n_HI, T_gas, beta=None):
         """温度 T_gas [K] での準位占有率（Σ = 1）。衝突係数は温度グリッドから log T で線形内挿する。beta は脱出確率 (effective_A)。"""
-        log_T = numpy.clip(numpy.log10(T_gas), LOG_T_GRID[0], LOG_T_GRID[-1])
-        k = min(max(int(numpy.searchsorted(LOG_T_GRID, log_T)), 1), len(LOG_T_GRID) - 1)
-        w = (log_T - LOG_T_GRID[k - 1]) / (LOG_T_GRID[k] - LOG_T_GRID[k - 1])
-        C_e = (1.0 - w) * self.C_e[k - 1] + w * self.C_e[k]
-        C_H = (1.0 - w) * self.C_H[k - 1] + w * self.C_H[k]
-        R = self.effective_A(beta) + n_e * C_e + n_HI * C_H
+        grid = self.log_T_grid
+        log_T = numpy.clip(numpy.log10(T_gas), grid[0], grid[-1])
+        k = min(max(int(numpy.searchsorted(grid, log_T)), 1), len(grid) - 1)
+        w = (log_T - grid[k - 1]) / (grid[k] - grid[k - 1])
+        C_e = (1.0 - w) * self.C_e[k - 1].astype(float) + w * self.C_e[k].astype(float)
+        R = self.effective_A(beta) + n_e * C_e
+        if self.C_H is not None:
+            R += n_HI * ((1.0 - w) * self.C_H[k - 1].astype(float) + w * self.C_H[k].astype(float))
         R[1:, 0] += 1e-30
         L = R.T.copy()
         diagonal = numpy.arange(self.N_levels)
@@ -254,21 +287,30 @@ class LineCoolingIon:
         """
         A = self.effective_A(beta)
         radiated_power = numpy.sum(A * self.delta_E, axis=1) if beta is not None else self.radiated_power
-        R = A[None, :, :] + n_e * self.C_e + n_HI * self.C_H
-        R[:, 1:, 0] += 1e-30  # どの遷移ともつながらない準位があっても行列が特異にならないようにする
-        L = numpy.swapaxes(R, 1, 2).copy()
+        N_T = len(self.T_grid)
+        cooling = numpy.zeros(N_T)
         diagonal = numpy.arange(self.N_levels)
-        L[:, diagonal, diagonal] -= numpy.sum(R, axis=2)
-        L[:, 0, :] = 1.0  # 規格化条件 Σ n_i = 1 で 1 本目の式を置き換える
-        b = numpy.zeros((len(T_GRID), self.N_levels, 1))
-        b[:, 0, 0] = 1.0
-        populations = numpy.linalg.solve(L, b)[:, :, 0]
-        return numpy.maximum(populations, 0.0) @ radiated_power
+        chunk = max(1, int(2.0e7 // (self.N_levels**2)))   # 一度に解く温度の数 (倍精度の作業配列を ~160 MB 以下に抑える)
+        for start in range(0, N_T, chunk):
+            stop = min(start + chunk, N_T)
+            R = A[None, :, :] + n_e * self.C_e[start:stop].astype(float)
+            if self.C_H is not None and n_HI > 0.0:
+                R += n_HI * self.C_H[start:stop].astype(float)
+            R[:, 1:, 0] += 1e-30  # どの遷移ともつながらない準位があっても行列が特異にならないようにする
+            L = numpy.swapaxes(R, 1, 2).copy()
+            L[:, diagonal, diagonal] -= numpy.sum(R, axis=2)
+            L[:, 0, :] = 1.0  # 規格化条件 Σ n_i = 1 で 1 本目の式を置き換える
+            b = numpy.zeros((stop - start, self.N_levels, 1))
+            b[:, 0, 0] = 1.0
+            populations = numpy.linalg.solve(L, b)[:, :, 0]
+            cooling[start:stop] = numpy.maximum(populations, 0.0) @ radiated_power
+        return cooling
 
 
 CACHE_RELATIVE_TOLERANCE = 1e-3  # n_e, n_HI の相対変化がこれ未満なら直前の表を再利用する
 MINIMUM_ION_FRACTION = 1e-8      # 割合がこれ未満のイオンは冷却に寄与しないとみなし、準位占有率を解かない
 LOG_COOLING_FLOOR = -300.0       # 冷却率ゼロ（データなし）を表す log10 Λ
+LOG_NE_NODE_STEP = 0.05          # 冷却率の表をキャッシュする log10 n_e の節点の間隔 (節点の間は log Λ を線形内挿)
 
 
 def _close(x, x_cached):
@@ -280,7 +322,7 @@ class LineCoolingSet:
     複数イオンの輝線冷却をまとめて扱う。
     names: CHIANTI のイオン名のリスト。データがないイオンは None として冷却ゼロとする。
     """
-    def __init__(self, names, N_levels_max=N_LEVELS_MAX):
+    def __init__(self, names, N_levels_max=None):
         self.names = list(names)
         self.ions = []
         self.missing = []
@@ -294,8 +336,17 @@ class LineCoolingSet:
             else:
                 self.missing.append(name)
             self.ions.append(None)
-        # イオンごとに直前に作った表のキャッシュ: [n_e, n_HI, log10 Λ(T_GRID), β]
+        # イオンごとに直前に作った表のキャッシュ: [n_e, n_HI, log10 Λ(T_GRID), β] (H 原子衝突か脱出確率を使うとき)
         self._cache = [[None, None, None, None] for _ in self.ions]
+        # イオンごとの log n_e の節点の表のキャッシュ: {節点の番号: log10 Λ(T_GRID)}
+        self._node_cache = [{} for _ in self.ions]
+
+    def _node_table(self, k, node):
+        cache = self._node_cache[k]
+        if node not in cache:
+            n_e = 10**(node * LOG_NE_NODE_STEP)
+            cache[node] = numpy.log10(numpy.maximum(self.ions[k].cooling_per_ion(n_e, 0.0), 1e-300))
+        return cache[node]
 
     def table(self, n_e, n_HI, fractions, betas=None):
         """
@@ -310,6 +361,13 @@ class LineCoolingSet:
             if ion is None or fractions[k] < MINIMUM_ION_FRACTION:
                 continue
             beta = None if betas is None else betas[k]
+            if beta is None and ion.C_H is None and n_e > 0.0:
+                # log n_e の節点で解いた表を内挿する (n_HI によらない)
+                x = numpy.log10(n_e) / LOG_NE_NODE_STEP
+                node = int(numpy.floor(x))
+                w = x - node
+                table[k] = (1.0 - w) * self._node_table(k, node) + w * self._node_table(k, node + 1)
+                continue
             cache = self._cache[k]
             same_beta = (beta is None and cache[3] is None) or (beta is not None and cache[3] is not None and numpy.array_equal(beta, cache[3]))
             if cache[2] is None or not (_close(n_e, cache[0]) and _close(n_HI, cache[1]) and same_beta):
